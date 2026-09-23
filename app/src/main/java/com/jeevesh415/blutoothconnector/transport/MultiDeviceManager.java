@@ -59,6 +59,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
             @Override public void onError(BluetoothDevice device, Exception error) {
                 if (device != null) {
+                    connecting.remove(device.getAddress());
                     retryLater(device);
                     if (MultiDeviceManager.this.listener != null) {
                         MultiDeviceManager.this.listener.onConnectError(device, error);
