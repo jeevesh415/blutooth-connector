@@ -30,6 +30,10 @@
         android:allowBackup="false"
         android:supportsRtl="true">
         <activity
+            android:name=".WebDashboardActivity"
+            android:exported="false" />
+
+        <activity
             android:name=".MainActivity"
             android:exported="true">
             <intent-filter>
