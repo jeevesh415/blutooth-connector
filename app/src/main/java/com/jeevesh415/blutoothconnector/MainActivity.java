@@ -30,6 +30,7 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_PERMISSIONS = 100;
@@ -46,6 +47,9 @@ public final class MainActivity extends Activity {
 
     private final MultiDeviceManager.Listener uiListener = new MultiDeviceManager.Listener() {
         @Override public void onConnected(DeviceSession session) {
+            ReliableCommandClient old =
+                    commandClients.remove(session.address());
+            if (old != null) old.close();
             attachCommandClient(session);
             runOnUiThread(() -> updateStatus(
                     "Connected peers: " + peerCount()
@@ -416,7 +420,7 @@ public final class MainActivity extends Activity {
 
     private void sendStagedFile(File file) {
         int total = peers.sessions().size();
-        int[] complete = {0};
+        AtomicInteger complete = new AtomicInteger(0);
 
         updateStatus("Sending " + file.getName() + " to " + total + " devices...");
 
