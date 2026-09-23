@@ -6,7 +6,6 @@ import java.io.File;
 import java.io.RandomAccessFile;
 import java.net.Socket;
 import java.security.MessageDigest;
-import java.util.Arrays;
 
 public final class ReliableFileTransfer {
     private ReliableFileTransfer() {}
@@ -49,8 +48,7 @@ public final class ReliableFileTransfer {
             if (status != BulkTransferProtocol.STATUS_OK) {
                 throw new java.io.IOException("Receiver integrity/status error: " + status);
             }
-            long completed = in.readLong();
-            return completed;
+            return in.readLong();
         }
     }
 
@@ -62,8 +60,9 @@ public final class ReliableFileTransfer {
                 return send(file, host, port, token);
             } catch (Exception e) {
                 last = e;
-                try { Thread.sleep(Math.min(5000L, 250L * attempt * attempt)); }
-                catch (InterruptedException interrupted) {
+                try {
+                    Thread.sleep(Math.min(5000L, 250L * attempt * attempt));
+                } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw interrupted;
                 }
@@ -72,15 +71,19 @@ public final class ReliableFileTransfer {
         throw last;
     }
 
-    public static File receive(Socket socket, File directory, byte[] expectedToken) throws Exception {\n        DataInputStream in = new DataInputStream(\n                new java.io.BufferedInputStream(socket.getInputStream(), BulkTransferProtocol.BUFFER_BYTES));\n        DataOutputStream out = new DataOutputStream(\n                new java.io.BufferedOutputStream(socket.getOutputStream(), BulkTransferProtocol.BUFFER_BYTES));\n        return receive(in, out, directory, expectedToken);\n    }\n\n    public static File receive(DataInputStream in, DataOutputStream out, File directory, byte[] expectedToken) throws Exception {
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw new java.io.IOException("Cannot create transfer directory");
-        }
-
+    public static File receive(Socket socket, File directory, byte[] expectedToken) throws Exception {
         DataInputStream in = new DataInputStream(
                 new java.io.BufferedInputStream(socket.getInputStream(), BulkTransferProtocol.BUFFER_BYTES));
         DataOutputStream out = new DataOutputStream(
                 new java.io.BufferedOutputStream(socket.getOutputStream(), BulkTransferProtocol.BUFFER_BYTES));
+        return receive(in, out, directory, expectedToken);
+    }
+
+    public static File receive(DataInputStream in, DataOutputStream out,
+                               File directory, byte[] expectedToken) throws Exception {
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new java.io.IOException("Cannot create transfer directory");
+        }
 
         BulkTransferProtocol.Request request = BulkTransferProtocol.readRequest(in);
         if (!MessageDigest.isEqual(expectedToken, request.token)) {
@@ -115,9 +118,7 @@ public final class ReliableFileTransfer {
         byte[] actual = BulkTransferProtocol.sha256(part);
         if (!MessageDigest.isEqual(actual, request.sha256)) {
             BulkTransferProtocol.writeResponse(out, BulkTransferProtocol.STATUS_INTEGRITY_ERROR, part.length());
-            if (!part.delete()) {
-                part.deleteOnExit();
-            }
+            if (!part.delete()) part.deleteOnExit();
             throw new java.io.IOException("SHA-256 integrity check failed");
         }
 
