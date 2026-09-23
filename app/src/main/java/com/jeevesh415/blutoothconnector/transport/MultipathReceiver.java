@@ -45,14 +45,18 @@ public final class MultipathReceiver {
     }
 
     public static File receive(Socket socket, File directory, byte[] expectedToken) throws Exception {
-        if (!directory.exists() && !directory.mkdirs()) {
-            throw new java.io.IOException("Cannot create transfer directory");
-        }
-
         DataInputStream in = new DataInputStream(
                 new java.io.BufferedInputStream(socket.getInputStream(), 1024 * 1024));
         DataOutputStream out = new DataOutputStream(
                 new java.io.BufferedOutputStream(socket.getOutputStream(), 64 * 1024));
+        return receive(in, out, directory, expectedToken);
+    }
+
+    public static File receive(DataInputStream in, DataOutputStream out,
+                               File directory, byte[] expectedToken) throws Exception {
+        if (!directory.exists() && !directory.mkdirs()) {
+            throw new java.io.IOException("Cannot create transfer directory");
+        }
 
         if (in.readInt() != MAGIC) throw new java.io.IOException("Bad BCL2 magic");
         if (in.readInt() != VERSION) throw new java.io.IOException("Unsupported BCL2 version");
