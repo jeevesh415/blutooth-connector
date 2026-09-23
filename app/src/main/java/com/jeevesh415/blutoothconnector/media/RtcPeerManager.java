@@ -33,13 +33,23 @@ public final class RtcPeerManager implements AutoCloseable {
     }
 
     private final Context context;
-    private final Listener listener;
+    private volatile Listener listener;
     private final Map<String, LowLatencyRtcEngine> engines = new ConcurrentHashMap<>();
 
     public RtcPeerManager(Context context, Listener listener) {
         this.context = context.getApplicationContext();
         this.listener = listener;
         LowLatencyRtcEngine.initialize(this.context);
+    }
+
+    public void setListener(Listener listener) {
+        if (listener != null) this.listener = listener;
+    }
+
+    public void sendControl(String peerAddress, JSONObject command) {
+        LowLatencyRtcEngine engine = engines.get(peerAddress);
+        if (engine == null) throw new IllegalStateException("RTC session not found");
+        engine.sendControl(command.toString());
     }
 
     public void startPublisher(DeviceSession session,
