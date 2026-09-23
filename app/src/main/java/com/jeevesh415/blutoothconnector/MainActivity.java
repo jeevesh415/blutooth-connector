@@ -32,7 +32,6 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH = 100;
     private static final int REQUEST_FILE = 200;
-    private static final int REQUEST_NETWORK = 201;
 
     private final AtomicLong sequence = new AtomicLong();
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
@@ -127,6 +126,8 @@ public final class MainActivity extends Activity {
             }
 
             @Override public void onDisconnected(DeviceSession session, Exception error) {
+                ReliableCommandClient old = commandClients.remove(session.address());
+                if (old != null) old.close();
                 runOnUiThread(() -> updateStatus(
                         "Reconnecting: " + safeName(session.device)
                                 + "\nConnected peers: " + peers.sessions().size()));
