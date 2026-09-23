@@ -96,3 +96,6 @@ On Phone A:
 5. The receiver advertises local TCP bulk endpoints through the Bluetooth capability exchange.
 
 The next implementation layer is a real file-picker workflow on the controller and an explicit transfer UI that selects the fastest mutually available path per device.
+
+
+CI verification v3.
