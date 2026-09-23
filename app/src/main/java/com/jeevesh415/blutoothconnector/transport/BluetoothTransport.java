@@ -32,12 +32,15 @@ public final class BluetoothTransport implements AutoCloseable {
         serverSocket = adapter.listenUsingRfcommWithServiceRecord(
                 "Blutooth Connector", Protocol.RFCOMM_UUID);
         Thread t = new Thread(() -> {
-            try {
-                BluetoothSocket accepted = serverSocket.accept();
-                socket = accepted;
-                listener.onConnected(accepted);
-            } catch (Exception e) {
-                listener.onError(e);
+            while (serverSocket != null) {
+                try {
+                    BluetoothSocket accepted = serverSocket.accept();
+                    socket = accepted;
+                    listener.onConnected(accepted);
+                } catch (Exception e) {
+                    if (serverSocket != null) listener.onError(e);
+                    break;
+                }
             }
         }, "bluetooth-rfcomm-server");
         t.start();
