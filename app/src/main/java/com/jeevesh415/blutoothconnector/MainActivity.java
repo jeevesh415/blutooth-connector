@@ -33,7 +33,8 @@ import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class MainActivity extends Activity {
-    private static final int REQUEST_PERMISSIONS = 100;
+    private static final int REQUEST_BLUETOOTH_PERMISSIONS = 100;
+    private static final int REQUEST_LOCAL_NETWORK = 101;
     private static final int REQUEST_FILE = 200;
 
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
@@ -126,19 +127,10 @@ public final class MainActivity extends Activity {
             permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE);
         }
 
-        if (Build.VERSION.SDK_INT >= 33) {
-            permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES);
-        } else if (Build.VERSION.SDK_INT >= 26) {
-            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
-        }
-
-        if (Build.VERSION.SDK_INT >= 37) {
-            permissions.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
-        }
-
         ArrayList<String> missing = new ArrayList<>();
         for (String permission : permissions) {
-            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+            if (checkSelfPermission(permission)
+                    != PackageManager.PERMISSION_GRANTED) {
                 missing.add(permission);
             }
         }
@@ -146,14 +138,41 @@ public final class MainActivity extends Activity {
         if (missing.isEmpty()) {
             ensureConnectionService();
         } else {
-            requestPermissions(missing.toArray(new String[0]), REQUEST_PERMISSIONS);
+            requestPermissions(
+                    missing.toArray(new String[0]),
+                    REQUEST_BLUETOOTH_PERMISSIONS);
         }
+    }
+
+    private void requestLocalNetworkThenChooseFile() {
+        ArrayList<String> missing = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT >= 37
+                && checkSelfPermission(
+                        Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        != PackageManager.PERMISSION_GRANTED) {
+            missing.add(
+                    Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
+
+        if (missing.isEmpty()) {
+            if (service != null) service.ensureBulkEndpoint();
+            openFilePicker();
+            return;
+        }
+
+        requestPermissions(
+                missing.toArray(new String[0]),
+                REQUEST_LOCAL_NETWORK);
     }
 
     @Override public void onRequestPermissionsResult(
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_PERMISSIONS) return;
+        if (requestCode != REQUEST_BLUETOOTH_PERMISSIONS
+                && requestCode != REQUEST_LOCAL_NETWORK) {
+            return;
+        }
 
         boolean allGranted = true;
         for (int result : grantResults) {
@@ -163,11 +182,24 @@ public final class MainActivity extends Activity {
             }
         }
 
+        if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
+            if (allGranted) {
+                ensureConnectionService();
+                status.setText(
+                        "Bluetooth permissions granted. Connection service starting.");
+            } else {
+                status.setText(
+                        "Bluetooth permissions were not granted.");
+            }
+            return;
+        }
+
         if (allGranted) {
-            ensureConnectionService();
-            status.setText("Permissions granted. Connection service starting.");
+            if (service != null) service.ensureBulkEndpoint();
+            openFilePicker();
         } else {
-            status.setText("Required nearby-device/network permissions were not granted.");
+            status.setText(
+                    "Local network permission was not granted.");
         }
     }
 
@@ -357,15 +389,14 @@ public final class MainActivity extends Activity {
     }
 
     private void chooseFile() {
-        if (!hasLocalNetworkPermission()) {
-            status.setText("Local network permission is required for bulk transfer.");
-            return;
-        }
         if (peers == null || peers.sessions().isEmpty()) {
             status.setText("Connect at least one peer first.");
             return;
         }
+        requestLocalNetworkThenChooseFile();
+    }
 
+    private void openFilePicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
         intent.setType("*/*");
