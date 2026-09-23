@@ -19,6 +19,7 @@ import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
+import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -38,6 +39,7 @@ public final class ConnectionService extends Service {
 
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
+    private WifiDirectPathManager wifiDirect;
     private final ScheduledExecutorService capabilityRefresh =
             Executors.newSingleThreadScheduledExecutor();
     private final java.util.concurrent.ExecutorService commandExecutor =
@@ -51,6 +53,49 @@ public final class ConnectionService extends Service {
 
     public MultiDeviceManager peers() {
         return peers;
+    }
+
+    public synchronized void startWifiDirect() {
+        if (wifiDirect != null) return;
+        try {
+            wifiDirect = new WifiDirectPathManager(
+                    this,
+                    new WifiDirectPathManager.Listener() {
+                        @Override public void onPeerDiscovered(
+                                android.net.wifi.p2p.WifiP2pDevice device) {}
+
+                        @Override public void onConnected(
+                                android.net.wifi.p2p.WifiP2pInfo info,
+                                android.net.Network network,
+                                String ipv4) {
+                            // Refresh capabilities so a new P2P endpoint is advertised.
+                            MultiDeviceManager manager = peers;
+                            if (manager != null) {
+                                for (DeviceSession session : manager.sessions()) {
+                                    sendCapabilities(session);
+                                }
+                            }
+                        }
+
+                        @Override public void onDisconnected() {
+                            MultiDeviceManager manager = peers;
+                            if (manager != null) {
+                                for (DeviceSession session : manager.sessions()) {
+                                    sendCapabilities(session);
+                                }
+                            }
+                        }
+
+                        @Override public void onError(Exception error) {}
+                    });
+            wifiDirect.start();
+        } catch (Exception error) {
+            wifiDirect = null;
+        }
+    }
+
+    public synchronized WifiDirectPathManager wifiDirect() {
+        return wifiDirect;
     }
 
     @Override public void onCreate() {
@@ -73,42 +118,42 @@ public final class ConnectionService extends Service {
 
         ensureBulkEndpoint();
 
-        peers = new MultiDeviceManager(this, adapter, new MultiDeviceManager.Listener() {
-            @Override public void onConnected(DeviceSession session) {
-                sendCapabilities(session);
-            }
+        peers = new MultiDeviceManager(
+                this,
+                adapter,
+                new MultiDeviceManager.Listener() {
+                    @Override public void onConnected(DeviceSession session) {
+                        sendCapabilities(session);
+                    }
 
-            @Override public void onFrame(DeviceSession session, Frame frame) {
-                handleFrame(session, frame);
-            }
+                    @Override public void onFrame(
+                            DeviceSession session, Frame frame) {
+                        handleFrame(session, frame);
+                    }
 
-            @Override public void onDisconnected(DeviceSession session, Exception error) {}
+                    @Override public void onDisconnected(
+                            DeviceSession session, Exception error) {}
 
-            @Override public void onConnectError(BluetoothDevice device, Exception error) {}
-        });
+                    @Override public void onConnectError(
+                            BluetoothDevice device, Exception error) {}
+                });
 
         try {
             peers.startReceiver();
-        } catch (Exception ignored) {
-            // Outgoing connections remain available if the server socket cannot start.
-        }
+        } catch (Exception ignored) {}
     }
+
     public synchronized void ensureBulkEndpoint() {
         if (bulk != null) return;
 
-        TcpBulkEndpoint candidate =
-                new TcpBulkEndpoint();
+        TcpBulkEndpoint candidate = new TcpBulkEndpoint();
         try {
             candidate.start(
-                    new File(
-                            getFilesDir(),
-                            "transfers"),
+                    new File(getFilesDir(), "transfers"),
                     new TcpBulkEndpoint.Listener() {
-                        @Override public void onTransferComplete(
-                                File file) {}
+                        @Override public void onTransferComplete(File file) {}
 
-                        @Override public void onError(
-                                Exception error) {}
+                        @Override public void onError(Exception error) {}
                     });
             bulk = candidate;
 
@@ -119,9 +164,7 @@ public final class ConnectionService extends Service {
                 }
             }
         } catch (Exception error) {
-            try {
-                candidate.close();
-            } catch (Exception ignored) {}
+            try { candidate.close(); } catch (Exception ignored) {}
             bulk = null;
         }
     }
@@ -175,49 +218,24 @@ public final class ConnectionService extends Service {
             session.lastTxMs = System.currentTimeMillis();
         } catch (Exception ignored) {}
     }
+
     private void handleCommand(
             DeviceSession session,
             Frame frame) {
         synchronized (session.commandLock) {
             try {
-                Frame result =
-                        router.route(
-                                frame,
-                                session.address());
+                Frame result = router.route(
+                        frame,
+                        session.address());
                 session.connection.send(new Frame(
                         result.version,
                         result.type,
                         session.nextSequence(),
                         result.timestampMs,
                         result.payload));
-                session.lastTxMs =
-                        System.currentTimeMillis();
+                session.lastTxMs = System.currentTimeMillis();
             } catch (Exception error) {
-                try {
-                    session.connection.send(new Frame(
-                            Protocol.VERSION,
-                            Protocol.ERROR,
-                            session.nextSequence(),
-                            System.currentTimeMillis(),
-                            new JSONObject()
-                                    .put(
-                                            "requestId",
-                                            frame.payload.optString(
-                                                    "requestId",
-                                                    ""))
-                                    .put(
-                                            "status",
-                                            "error")
-                                    .put(
-                                            "code",
-                                            "ROUTER_ERROR")
-                                    .put(
-                                            "message",
-                                            error.getMessage() == null
-                                                    ? error.getClass()
-                                                            .getSimpleName()
-                                                    : error.getMessage())));
-                } catch (Exception ignored) {}
+                sendProtocolError(session, frame, error);
             }
         }
     }
@@ -226,10 +244,12 @@ public final class ConnectionService extends Service {
         try {
             JSONObject payload = new JSONObject()
                     .put("protocol", Protocol.VERSION)
-                    .put("maxBluetoothPeers", MultiDeviceManager.MAX_CLASSIC_PEERS)
+                    .put("maxBluetoothPeers",
+                            MultiDeviceManager.MAX_CLASSIC_PEERS)
                     .put("transports", new JSONArray()
                             .put("bluetooth-rfcomm")
-                            .put("tcp-local"))
+                            .put("tcp-local")
+                            .put("wifi-direct"))
                     .put("capabilities", new JSONArray()
                             .put("transport.ping")
                             .put("device.info")
@@ -257,7 +277,8 @@ public final class ConnectionService extends Service {
     }
 
     private void createNotificationChannel() {
-        NotificationManager nm = getSystemService(NotificationManager.class);
+        NotificationManager nm =
+                getSystemService(NotificationManager.class);
         nm.createNotificationChannel(new NotificationChannel(
                 CHANNEL,
                 "Blutooth connection",
@@ -267,19 +288,23 @@ public final class ConnectionService extends Service {
     private Notification notification() {
         return new Notification.Builder(this, CHANNEL)
                 .setContentTitle("Blutooth Connector")
-                .setContentText("Multi-device connection service is active")
-                .setSmallIcon(android.R.drawable.stat_sys_data_bluetooth)
+                .setContentText(
+                        "Multi-device connection service is active")
+                .setSmallIcon(
+                        android.R.drawable.stat_sys_data_bluetooth)
                 .setOngoing(true)
                 .build();
     }
 
-    @Override public int onStartCommand(Intent intent, int flags, int startId) {
+    @Override public int onStartCommand(
+            Intent intent, int flags, int startId) {
         return START_STICKY;
     }
 
     @Override public void onDestroy() {
         capabilityRefresh.shutdownNow();
         commandExecutor.shutdownNow();
+        if (wifiDirect != null) wifiDirect.close();
         if (peers != null) peers.close();
         if (bulk != null) bulk.close();
         super.onDestroy();
