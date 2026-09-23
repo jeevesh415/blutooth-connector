@@ -21,6 +21,8 @@ import java.util.concurrent.TimeUnit;
 
 public final class MultiDeviceManager implements AutoCloseable {
     public static final int MAX_CLASSIC_PEERS = 7;
+    private static final long HEARTBEAT_MS = 5000;
+    private static final long DEAD_AFTER_MS = 15000;
 
     public interface Listener {
         void onConnected(DeviceSession session);
@@ -36,6 +38,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     private final ScheduledExecutorService scheduler =
             Executors.newScheduledThreadPool(2);
     private volatile Listener listener;
+    private volatile boolean closed;
 
     public MultiDeviceManager(BluetoothAdapter adapter, Listener listener) {
         this.listener = listener;
@@ -47,28 +50,26 @@ public final class MultiDeviceManager implements AutoCloseable {
 
             @Override public void onError(BluetoothDevice device, Exception error) {
                 if (device != null) {
-                    retryLater(device, error);
+                    retryLater(device);
                     if (MultiDeviceManager.this.listener != null) {
                         MultiDeviceManager.this.listener.onConnectError(device, error);
                     }
                 }
             }
         });
+        scheduler.scheduleAtFixedRate(this::healthTick,
+                HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
     }
 
-    public void setListener(Listener listener) {
-        this.listener = listener;
-    }
-
-    public void startReceiver() throws Exception {
-        transport.listen();
-    }
+    public void setListener(Listener listener) { this.listener = listener; }
+    public void startReceiver() throws Exception { transport.listen(); }
 
     public void connect(BluetoothDevice device) {
-        if (device == null) return;
+        if (closed || device == null) return;
         if (sessions.size() >= MAX_CLASSIC_PEERS &&
                 !sessions.containsKey(device.getAddress())) {
-            throw new IllegalStateException("Application peer limit reached: " + MAX_CLASSIC_PEERS);
+            throw new IllegalStateException(
+                    "Application peer limit reached: " + MAX_CLASSIC_PEERS);
         }
         knownDevices.put(device.getAddress(), device);
         retryAttempts.remove(device.getAddress());
@@ -91,13 +92,12 @@ public final class MultiDeviceManager implements AutoCloseable {
         return Collections.unmodifiableList(new ArrayList<>(sessions.values()));
     }
 
-    public DeviceSession session(String address) {
-        return sessions.get(address);
-    }
+    public DeviceSession session(String address) { return sessions.get(address); }
 
     public void send(String address, Frame frame) throws Exception {
         DeviceSession session = sessions.get(address);
-        if (session == null) throw new IllegalStateException("Device not connected: " + address);
+        if (session == null) throw new IllegalStateException(
+                "Device not connected: " + address);
         session.connection.send(frame);
         session.lastTxMs = System.currentTimeMillis();
     }
@@ -108,7 +108,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                 session.connection.send(frame);
                 session.lastTxMs = System.currentTimeMillis();
             } catch (Exception e) {
-                listener.onDisconnected(session, e);
+                closeSession(session, e);
             }
         }
     }
@@ -129,10 +129,18 @@ public final class MultiDeviceManager implements AutoCloseable {
                     new FramedConnection.Listener() {
                         @Override public void onFrame(Frame frame) {
                             DeviceSession current = sessions.get(address);
-                            if (current != null) {
-                                current.lastRxMs = System.currentTimeMillis();
-                                if (listener != null) listener.onFrame(current, frame);
+                            if (current == null) return;
+                            current.lastRxMs = System.currentTimeMillis();
+
+                            if (Protocol.PONG.equals(frame.type)) {
+                                long sent = frame.payload.optLong("t0", 0);
+                                if (sent == current.lastPingSentNs && sent != 0) {
+                                    long rttMs = (System.nanoTime() - sent) / 1_000_000L;
+                                    current.metrics.observe(rttMs);
+                                }
                             }
+
+                            if (listener != null) listener.onFrame(current, frame);
                         }
 
                         @Override public void onClosed(Exception error) {
@@ -141,7 +149,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                             if (current != null) {
                                 current.state = DeviceSession.State.RECONNECTING;
                                 if (listener != null) listener.onDisconnected(current, error);
-                                retryLater(device, error);
+                                retryLater(device);
                             }
                         }
                     });
@@ -155,6 +163,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                     .put("role", "peer")
                     .put("maxPeers", MAX_CLASSIC_PEERS)
                     .put("device", safeName(device));
+
             holder[0].send(new Frame(
                     Protocol.VERSION, Protocol.HELLO,
                     System.nanoTime(), System.currentTimeMillis(), hello));
@@ -163,9 +172,54 @@ public final class MultiDeviceManager implements AutoCloseable {
         } catch (Exception e) {
             try { socket.close(); } catch (Exception ignored) {}
             transport.forgetSocket(address, socket);
-            retryLater(device, e);
+            retryLater(device);
             if (listener != null) listener.onConnectError(device, e);
         }
+    }
+
+    private void healthTick() {
+        if (closed) return;
+        long now = System.currentTimeMillis();
+
+        for (DeviceSession session : sessions.values()) {
+            if (now - session.lastRxMs > DEAD_AFTER_MS) {
+                closeSession(session, new java.io.IOException("Peer heartbeat timeout"));
+                continue;
+            }
+
+            try {
+                long t0 = System.nanoTime();
+                session.lastPingSentNs = t0;
+                session.connection.send(new Frame(
+                        Protocol.VERSION, Protocol.PING,
+                        t0, now,
+                        new JSONObject().put("t0", t0)));
+                session.lastTxMs = now;
+            } catch (Exception e) {
+                closeSession(session, e);
+            }
+        }
+    }
+
+    private void closeSession(DeviceSession session, Exception error) {
+        String address = session.address();
+        if (sessions.remove(address, session)) {
+            session.state = DeviceSession.State.RECONNECTING;
+            try { session.connection.close(); } catch (Exception ignored) {}
+            transport.forgetSocket(address, session.socket);
+            if (listener != null) listener.onDisconnected(session, error);
+            retryLater(session.device);
+        }
+    }
+
+    private void retryLater(BluetoothDevice device) {
+        if (closed || device == null) return;
+        String address = device.getAddress();
+        int attempt = retryAttempts.merge(address, 1, Integer::sum);
+        long delay = Math.min(30, 1L << Math.min(attempt - 1, 4));
+        scheduler.schedule(() -> {
+            if (!closed && !sessions.containsKey(address)) transport.connect(device);
+        }, delay, TimeUnit.SECONDS);
     }
 
     private String safeName(BluetoothDevice device) {
@@ -177,18 +231,8 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
     }
 
-    private void retryLater(BluetoothDevice device, Exception error) {
-        if (device == null) return;
-        String address = device.getAddress();
-        int attempt = retryAttempts.merge(address, 1, Integer::sum);
-        long delay = Math.min(30, 1L << Math.min(attempt - 1, 4));
-        scheduler.schedule(() -> {
-            if (!sessions.containsKey(address)) transport.connect(device);
-        }, delay, TimeUnit.SECONDS);
-    }
-
-    @Override
-    public void close() {
+    @Override public void close() {
+        closed = true;
         scheduler.shutdownNow();
         transport.close();
         sessions.clear();
