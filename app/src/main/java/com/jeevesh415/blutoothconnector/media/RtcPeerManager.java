@@ -109,13 +109,21 @@ public final class RtcPeerManager implements AutoCloseable {
                 context,
                 new LowLatencyRtcEngine.Listener() {
                     @Override public void onLocalOffer(String sdp) {
-                        send(session, Protocol.RTC_OFFER,
-                                new JSONObject().put("sdp", sdp));
+                        try {
+                            send(session, Protocol.RTC_OFFER,
+                                    new JSONObject().put("sdp", sdp));
+                        } catch (Exception e) {
+                            listener.onError(peer, e);
+                        }
                     }
 
                     @Override public void onLocalAnswer(String sdp) {
-                        send(session, Protocol.RTC_ANSWER,
-                                new JSONObject().put("sdp", sdp));
+                        try {
+                            send(session, Protocol.RTC_ANSWER,
+                                    new JSONObject().put("sdp", sdp));
+                        } catch (Exception e) {
+                            listener.onError(peer, e);
+                        }
                     }
 
                     @Override public void onIceCandidate(IceCandidate candidate) {
