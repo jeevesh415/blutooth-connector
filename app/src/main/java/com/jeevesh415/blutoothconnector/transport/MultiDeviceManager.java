@@ -17,6 +17,7 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
+import java.io.File;
 import java.util.concurrent.TimeUnit;
 
 public final class MultiDeviceManager implements AutoCloseable {
@@ -31,12 +32,19 @@ public final class MultiDeviceManager implements AutoCloseable {
         void onConnectError(BluetoothDevice device, Exception error);
     }
 
+    public interface TransferListener {
+        void onComplete(DeviceSession session, long bytes);
+        void onError(DeviceSession session, Exception error);
+    }
+
     private final BluetoothTransport transport;
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, BluetoothDevice> knownDevices = new ConcurrentHashMap<>();
     private final Map<String, Integer> retryAttempts = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler =
             Executors.newScheduledThreadPool(2);
+    private final java.util.concurrent.ExecutorService bulkExecutor =
+            Executors.newCachedThreadPool();
     private volatile Listener listener;
     private volatile boolean closed;
 
@@ -94,6 +102,36 @@ public final class MultiDeviceManager implements AutoCloseable {
 
     public DeviceSession session(String address) { return sessions.get(address); }
 
+    public void transferFile(String address, File file, TransferListener listener) {
+        DeviceSession session = sessions.get(address);
+        if (session == null) {
+            if (listener != null) listener.onError(null,
+                    new IllegalStateException("Device not connected: " + address));
+            return;
+        }
+
+        bulkExecutor.execute(() -> {
+            Exception last = null;
+            for (BulkEndpointInfo endpoint : session.bulkEndpoints) {
+                try {
+                    if (endpoint.host.isEmpty() || endpoint.port < 1) continue;
+                    byte[] token = BulkTransferProtocol.decodeToken(endpoint.tokenBase64);
+                    long bytes = ReliableFileTransfer.sendWithResume(
+                            file, endpoint.host, endpoint.port, token, 5);
+                    if (listener != null) listener.onComplete(session, bytes);
+                    return;
+                } catch (Exception error) {
+                    last = error;
+                }
+            }
+            if (listener != null) {
+                listener.onError(session, last == null
+                        ? new IllegalStateException("No bulk endpoint advertised")
+                        : last);
+            }
+        });
+    }
+
     public void send(String address, Frame frame) throws Exception {
         DeviceSession session = sessions.get(address);
         if (session == null) throw new IllegalStateException(
@@ -131,6 +169,21 @@ public final class MultiDeviceManager implements AutoCloseable {
                             DeviceSession current = sessions.get(address);
                             if (current == null) return;
                             current.lastRxMs = System.currentTimeMillis();
+
+                            if (Protocol.CAPABILITIES.equals(frame.type)) {
+                                current.bulkEndpoints.clear();
+                                org.json.JSONArray endpoints =
+                                        frame.payload.optJSONArray("bulkEndpoints");
+                                if (endpoints != null) {
+                                    for (int i = 0; i < endpoints.length(); i++) {
+                                        org.json.JSONObject item = endpoints.optJSONObject(i);
+                                        if (item != null) {
+                                            current.bulkEndpoints.add(
+                                                    BulkEndpointInfo.fromJson(item));
+                                        }
+                                    }
+                                }
+                            }
 
                             if (Protocol.PONG.equals(frame.type)) {
                                 long sent = frame.payload.optLong("t0", 0);
@@ -234,6 +287,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     @Override public void close() {
         closed = true;
         scheduler.shutdownNow();
+        bulkExecutor.shutdownNow();
         transport.close();
         sessions.clear();
         knownDevices.clear();
