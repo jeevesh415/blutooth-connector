@@ -99,7 +99,7 @@ public final class ConnectionService extends Service {
                 session.connection.send(new Frame(
                         Protocol.VERSION,
                         Protocol.PONG,
-                        frame.sequence,
+                        session.nextSequence(),
                         System.currentTimeMillis(),
                         payload));
             } else if (Protocol.COMMAND.equals(frame.type)) {
@@ -151,7 +151,7 @@ public final class ConnectionService extends Service {
             session.connection.send(new Frame(
                     Protocol.VERSION,
                     Protocol.CAPABILITIES,
-                    System.nanoTime(),
+                    session.nextSequence(),
                     System.currentTimeMillis(),
                     payload));
         } catch (Exception ignored) {}
