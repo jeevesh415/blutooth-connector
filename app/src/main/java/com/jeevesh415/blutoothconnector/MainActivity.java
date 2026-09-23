@@ -32,6 +32,7 @@ import java.util.concurrent.atomic.AtomicLong;
 public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH = 100;
     private static final int REQUEST_FILE = 200;
+    private static final int REQUEST_NETWORK = 201;
 
     private final AtomicLong sequence = new AtomicLong();
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
@@ -45,15 +46,55 @@ public final class MainActivity extends Activity {
         super.onCreate(state);
         buildUi();
 
+        requestRequiredPermissions();
+    }
+
+    private void requestRequiredPermissions() {
+        java.util.ArrayList<String> permissions = new java.util.ArrayList<>();
+
         if (Build.VERSION.SDK_INT >= 31) {
-            requestPermissions(new String[] {
-                    Manifest.permission.BLUETOOTH_SCAN,
-                    Manifest.permission.BLUETOOTH_CONNECT,
-                    Manifest.permission.BLUETOOTH_ADVERTISE
-            }, REQUEST_BLUETOOTH);
-        } else {
-            initPeerManager();
+            permissions.add(Manifest.permission.BLUETOOTH_SCAN);
+            permissions.add(Manifest.permission.BLUETOOTH_CONNECT);
+            permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE);
         }
+        if (Build.VERSION.SDK_INT >= 37) {
+            permissions.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
+
+        if (permissions.isEmpty()) {
+            initPeerManager();
+        } else {
+            requestPermissions(
+                    permissions.toArray(new String[0]),
+                    REQUEST_BLUETOOTH);
+        }
+    }
+
+    @Override public void onRequestPermissionsResult(
+            int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQUEST_BLUETOOTH) return;
+
+        boolean allGranted = true;
+        for (int result : grantResults) {
+            if (result != PackageManager.PERMISSION_GRANTED) {
+                allGranted = false;
+                break;
+            }
+        }
+
+        if (allGranted) {
+            initPeerManager();
+            status.setText("Required permissions granted.");
+        } else {
+            status.setText("Bluetooth/local-network permission is required for the enabled features.");
+        }
+    }
+
+    private boolean hasLocalNetworkPermission() {
+        return Build.VERSION.SDK_INT < 37 ||
+                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        == PackageManager.PERMISSION_GRANTED;
     }
 
     private void initPeerManager() {
@@ -268,6 +309,10 @@ public final class MainActivity extends Activity {
     }
 
     private void chooseFile() {
+        if (!hasLocalNetworkPermission()) {
+            status.setText("Local network permission is required for bulk transfer.");
+            return;
+        }
         if (peers == null || peers.sessions().isEmpty()) {
             status.setText("Connect at least one peer first.");
             return;
