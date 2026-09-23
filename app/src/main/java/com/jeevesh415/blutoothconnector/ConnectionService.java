@@ -69,18 +69,7 @@ public final class ConnectionService extends Service {
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter == null) return;
 
-        bulk = new TcpBulkEndpoint();
-        try {
-            bulk.start(
-                    new File(getFilesDir(), "transfers"),
-                    new TcpBulkEndpoint.Listener() {
-                        @Override public void onTransferComplete(File file) {}
-
-                        @Override public void onError(Exception error) {}
-                    });
-        } catch (Exception error) {
-            bulk = null;
-        }
+        ensureBulkEndpoint();
 
         peers = new MultiDeviceManager(this, adapter, new MultiDeviceManager.Listener() {
             @Override public void onConnected(DeviceSession session) {
@@ -100,6 +89,38 @@ public final class ConnectionService extends Service {
             peers.startReceiver();
         } catch (Exception ignored) {
             // Outgoing connections remain available if the server socket cannot start.
+        }
+    }
+    public synchronized void ensureBulkEndpoint() {
+        if (bulk != null) return;
+
+        TcpBulkEndpoint candidate =
+                new TcpBulkEndpoint();
+        try {
+            candidate.start(
+                    new File(
+                            getFilesDir(),
+                            "transfers"),
+                    new TcpBulkEndpoint.Listener() {
+                        @Override public void onTransferComplete(
+                                File file) {}
+
+                        @Override public void onError(
+                                Exception error) {}
+                    });
+            bulk = candidate;
+
+            MultiDeviceManager manager = peers;
+            if (manager != null) {
+                for (DeviceSession session : manager.sessions()) {
+                    sendCapabilities(session);
+                }
+            }
+        } catch (Exception error) {
+            try {
+                candidate.close();
+            } catch (Exception ignored) {}
+            bulk = null;
         }
     }
 
