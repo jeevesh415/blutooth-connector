@@ -225,6 +225,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
         try {
             final FramedConnection[] holder = new FramedConnection[1];
+            final DeviceSession[] sessionHolder = new DeviceSession[1];
             holder[0] = new FramedConnection(
                     socket.getInputStream(),
                     socket.getOutputStream(),
@@ -273,10 +274,12 @@ public final class MultiDeviceManager implements AutoCloseable {
                         }
 
                         @Override public void onClosed(Exception error) {
-                            DeviceSession current = sessions.remove(address);
-                            transport.forgetSocket(address, socket);
-                            if (current != null) {
-                                current.state = DeviceSession.State.RECONNECTING;
+                            DeviceSession current = sessionHolder[0];
+                            if (current != null
+                                    && sessions.remove(address, current)) {
+                                transport.forgetSocket(address, socket);
+                                current.state =
+                                        DeviceSession.State.RECONNECTING;
                                 notifyDisconnected(current, error);
                                 retryLater(device);
                             }
@@ -285,6 +288,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
             DeviceSession session =
                     new DeviceSession(device, socket, holder[0]);
+            sessionHolder[0] = session;
             sessions.put(address, session);
             retryAttempts.remove(address);
             holder[0].startReader();
