@@ -55,6 +55,8 @@ public final class MainActivity extends Activity {
         }
 
         @Override public void onFrame(DeviceSession session, Frame frame) {
+            ReliableCommandClient client = commandClients.get(session.address());
+            if (client != null) client.accept(frame);
             runOnUiThread(() -> updateStatus(
                     "Peers: " + peerCount()
                             + "\nLast: " + safeName(session.device)
@@ -445,7 +447,8 @@ public final class MainActivity extends Activity {
         commandClients.computeIfAbsent(
                 session.address(),
                 ignored -> new ReliableCommandClient(
-                        frame -> session.connection.send(frame)));
+                        frame -> session.connection.send(frame),
+                        session.metrics::adaptiveTimeoutMs));
     }
 
     private int peerCount() {
