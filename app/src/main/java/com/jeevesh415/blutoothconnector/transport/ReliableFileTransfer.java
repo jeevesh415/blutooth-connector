@@ -18,7 +18,9 @@ public final class ReliableFileTransfer {
         try (Socket socket = new Socket(host, port)) {
             socket.setSoTimeout(30_000);
             socket.setTcpNoDelay(false);
-            socket.setSendBufferSize(1024 * 1024);
+            socket.setKeepAlive(true);
+            socket.setSendBufferSize(4 * 1024 * 1024);
+            socket.setReceiveBufferSize(4 * 1024 * 1024);
 
             DataOutputStream out = new DataOutputStream(
                     new java.io.BufferedOutputStream(socket.getOutputStream(), BulkTransferProtocol.BUFFER_BYTES));
@@ -113,6 +115,9 @@ public final class ReliableFileTransfer {
         byte[] actual = BulkTransferProtocol.sha256(part);
         if (!MessageDigest.isEqual(actual, request.sha256)) {
             BulkTransferProtocol.writeResponse(out, BulkTransferProtocol.STATUS_INTEGRITY_ERROR, part.length());
+            if (!part.delete()) {
+                part.deleteOnExit();
+            }
             throw new java.io.IOException("SHA-256 integrity check failed");
         }
 
