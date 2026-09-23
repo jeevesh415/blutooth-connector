@@ -98,4 +98,21 @@ On Phone A:
 The next implementation layer is a real file-picker workflow on the controller and an explicit transfer UI that selects the fastest mutually available path per device.
 
 
-CI verification v5.
+## Adaptive multipath data plane
+
+The data plane now treats reachable local TCP addresses as a graph of candidate paths instead of selecting the first endpoint.
+
+- Bluetooth RFCOMM remains the low-latency control/discovery plane.
+- Local TCP paths can carry bulk data concurrently.
+- Files are striped into independently acknowledged chunks.
+- Chunks can arrive out of order and are reconstructed with random-access writes.
+- A final SHA-256 check protects end-to-end integrity.
+- Failed chunks are retried without restarting the entire transfer.
+- A spectral path scheduler uses recent throughput/RTT time series and a discrete Fourier high-frequency-instability term to adapt path allocation.
+- Endpoint metadata carries the network-interface identity so future Wi-Fi Direct/Aware paths can participate without changing the transfer abstraction.
+
+The mathematical layer is deliberately used for **scheduling**, not for pretending that mathematics can increase the physical bandwidth of a radio. Aggregate throughput can improve when the device exposes genuinely independent usable paths; interference, Android routing, chipset limitations, and shared RF resources still bound the result.
+
+### Research direction
+
+The architecture is compatible with a future path-ID model similar to multipath QUIC: independent path state, path-specific sequencing/congestion control, and an application scheduler above the transport. Android Wi-Fi Direct provides a direct peer-to-peer path, while Wi-Fi Aware supports direct high-speed bidirectional connections when a socket is established. These are candidates for additional channels, not assumptions that every phone supports them.
