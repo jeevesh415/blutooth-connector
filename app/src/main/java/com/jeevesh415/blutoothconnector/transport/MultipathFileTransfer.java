@@ -142,30 +142,37 @@ public final class MultipathFileTransfer {
                 continue;
             }
 
-            Network selectedNetwork = null;
-            String networkId = null;
+            boolean matchedNetwork = false;
 
             for (NetworkPathCatalog.Path path
                     : localPaths) {
-                if (endpoint.transport.equals(
-                        path.kind)) {
-                    selectedNetwork = path.network;
-                    networkId = path.id;
-                    break;
+                if (!endpoint.transport.equals(path.kind)) {
+                    continue;
                 }
+
+                String pathId = endpoint.transport
+                        + ":" + endpoint.host
+                        + ":" + endpoint.port
+                        + "@" + path.id;
+
+                candidates.add(new Candidate(
+                        endpoint,
+                        path.network,
+                        pathId));
+                matchedNetwork = true;
             }
 
-            String pathId = endpoint.transport
-                    + ":" + endpoint.host
-                    + ":" + endpoint.port
-                    + (networkId == null
-                            ? ""
-                            : "@" + networkId);
+            if (!matchedNetwork) {
+                String pathId = endpoint.transport
+                        + ":" + endpoint.host
+                        + ":" + endpoint.port
+                        + "@unbound";
 
-            candidates.add(new Candidate(
-                    endpoint,
-                    selectedNetwork,
-                    pathId));
+                candidates.add(new Candidate(
+                        endpoint,
+                        null,
+                        pathId));
+            }
         }
 
         // Remove duplicate endpoint/network tuples before scheduling.
