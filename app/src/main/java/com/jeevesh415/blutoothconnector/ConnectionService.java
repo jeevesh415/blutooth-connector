@@ -12,6 +12,8 @@ import android.net.NetworkRequest;
 import android.os.Binder;
 import android.os.IBinder;
 import android.content.Intent;
+import android.media.projection.MediaProjection;
+import android.media.projection.MediaProjectionManager;
 import android.content.pm.ServiceInfo;
 
 import com.jeevesh415.blutoothconnector.capability.CapabilityRegistry;
@@ -23,6 +25,7 @@ import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
 import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
+import com.jeevesh415.blutoothconnector.media.RtcPeerManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
@@ -45,6 +48,8 @@ public final class ConnectionService extends Service {
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
     private WifiDirectPathManager wifiDirect;
+    private RtcPeerManager rtc;
+    private MediaProjection projection;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
 
@@ -60,6 +65,70 @@ public final class ConnectionService extends Service {
 
     public MultiDeviceManager peers() {
         return peers;
+    }
+
+    public synchronized RtcPeerManager rtc() {
+        if (rtc == null) {
+            rtc = new RtcPeerManager(
+                    this,
+                    new RtcPeerManager.Listener() {
+                        @Override public void onRemoteVideo(
+                                String peerAddress,
+                                org.webrtc.VideoTrack track) {}
+
+                        @Override public void onState(
+                                String peerAddress,
+                                String state) {}
+
+                        @Override public void onError(
+                                String peerAddress,
+                                Exception error) {}
+                    });
+        }
+        return rtc;
+    }
+
+    /**
+     * Starts a user-consented screen + microphone publisher toward one
+     * already authenticated Bluetooth peer. The Bluetooth channel carries
+     * only SDP/ICE; audio/video stay on WebRTC SRTP.
+     */
+    public synchronized void startScreenShare(
+            String peerAddress,
+            int resultCode,
+            Intent projectionData) {
+        if (peers == null) throw new IllegalStateException("Connection service not ready");
+        if (projectionData == null) throw new IllegalArgumentException("projectionData");
+
+        DeviceSession target = null;
+        for (DeviceSession candidate : peers.sessions()) {
+            if (candidate.address().equals(peerAddress)) {
+                target = candidate;
+                break;
+            }
+        }
+        if (target == null) throw new IllegalArgumentException("Peer is not connected");
+
+        MediaProjectionManager manager =
+                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
+        if (manager == null) throw new IllegalStateException("MediaProjection unavailable");
+
+        if (projection != null) {
+            try { projection.stop(); } catch (Exception ignored) {}
+        }
+        projection = manager.getMediaProjection(resultCode, projectionData);
+        if (projection == null) throw new IllegalStateException("MediaProjection denied");
+
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        }
+
+        rtc().startPublisher(target, projection, 1280, 720, 30);
     }
 
     public synchronized void startWifiDirect() {
@@ -264,6 +333,15 @@ public final class ConnectionService extends Service {
                 return;
             }
 
+            if (Protocol.RTC_OFFER.equals(frame.type)
+                    || Protocol.RTC_ANSWER.equals(frame.type)
+                    || Protocol.RTC_ICE.equals(frame.type)
+                    || Protocol.RTC_CONTROL.equals(frame.type)
+                    || Protocol.RTC_STOP.equals(frame.type)) {
+                rtc().handle(session, frame);
+                return;
+            }
+
             if (Protocol.COMMAND.equals(frame.type)) {
                 commandExecutor.execute(
                         () -> handleCommand(
@@ -436,6 +514,11 @@ public final class ConnectionService extends Service {
 
     @Override public void onDestroy() {
         commandExecutor.shutdownNow();
+        if (projection != null) {
+            try { projection.stop(); } catch (Exception ignored) {}
+            projection = null;
+        }
+        if (rtc != null) rtc.close();
         unregisterNetworkTopologyMonitor();
 
         if (wifiDirect != null) {
