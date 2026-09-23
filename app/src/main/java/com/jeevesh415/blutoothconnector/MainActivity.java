@@ -319,6 +319,12 @@ public final class MainActivity extends Activity {
         streamScreen.setOnClickListener(v -> startScreenStream());
         root.addView(streamScreen, new LinearLayout.LayoutParams(-1, -2));
 
+        Button remoteViewer = new Button(this);
+        remoteViewer.setText("Open remote screen + control");
+        remoteViewer.setOnClickListener(v ->
+                startActivity(new Intent(this, RtcViewerActivity.class)));
+        root.addView(remoteViewer, new LinearLayout.LayoutParams(-1, -2));
+
         setContentView(root);
     }
 
