@@ -12,8 +12,6 @@ import android.net.NetworkRequest;
 import android.os.Binder;
 import android.os.IBinder;
 import android.content.Intent;
-import android.media.projection.MediaProjection;
-import android.media.projection.MediaProjectionManager;
 import android.content.pm.ServiceInfo;
 
 import com.jeevesh415.blutoothconnector.capability.CapabilityRegistry;
@@ -49,7 +47,6 @@ public final class ConnectionService extends Service {
     private TcpBulkEndpoint bulk;
     private WifiDirectPathManager wifiDirect;
     private RtcPeerManager rtc;
-    private MediaProjection projection;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
 
@@ -109,16 +106,6 @@ public final class ConnectionService extends Service {
         }
         if (target == null) throw new IllegalArgumentException("Peer is not connected");
 
-        MediaProjectionManager manager =
-                (MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE);
-        if (manager == null) throw new IllegalStateException("MediaProjection unavailable");
-
-        if (projection != null) {
-            try { projection.stop(); } catch (Exception ignored) {}
-        }
-        projection = manager.getMediaProjection(resultCode, projectionData);
-        if (projection == null) throw new IllegalStateException("MediaProjection denied");
-
         if (android.os.Build.VERSION.SDK_INT >= 29) {
             startForeground(
                     NOTIFICATION_ID,
@@ -128,7 +115,7 @@ public final class ConnectionService extends Service {
                             | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
         }
 
-        rtc().startPublisher(target, projection, 1280, 720, 30);
+        rtc().startPublisher(target, projectionData, 1280, 720, 30);
     }
 
     public synchronized void startWifiDirect() {
@@ -514,10 +501,6 @@ public final class ConnectionService extends Service {
 
     @Override public void onDestroy() {
         commandExecutor.shutdownNow();
-        if (projection != null) {
-            try { projection.stop(); } catch (Exception ignored) {}
-            projection = null;
-        }
         if (rtc != null) rtc.close();
         unregisterNetworkTopologyMonitor();
 
