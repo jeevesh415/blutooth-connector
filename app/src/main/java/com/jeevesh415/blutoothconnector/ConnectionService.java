@@ -130,7 +130,10 @@ public final class ConnectionService extends Service {
         try {
             if (Protocol.HELLO.equals(frame.type)) {
                 sendCapabilities(session);
-            } else if (Protocol.PING.equals(frame.type)) {
+                return;
+            }
+
+            if (Protocol.PING.equals(frame.type)) {
                 session.connection.send(new Frame(
                         Protocol.VERSION,
                         Protocol.PONG,
@@ -138,27 +141,39 @@ public final class ConnectionService extends Service {
                         System.currentTimeMillis(),
                         new JSONObject().put(
                                 "t0", frame.payload.optLong("t0", 0))));
-            } else if (Protocol.COMMAND.equals(frame.type)) {
-                Frame result = router.route(frame, session.address());
-                session.connection.send(result);
+                session.lastTxMs = System.currentTimeMillis();
+                return;
+            }
+
+            if (Protocol.COMMAND.equals(frame.type)) {
+                commandExecutor.execute(() -> handleCommand(session, frame));
             }
         } catch (Exception error) {
-            try {
-                session.connection.send(new Frame(
-                        Protocol.VERSION,
-                        Protocol.ERROR,
-                        session.nextSequence(),
-                        System.currentTimeMillis(),
-                        new JSONObject()
-                                .put("requestId",
-                                        frame.payload.optString("requestId", ""))
-                                .put("status", "error")
-                                .put("code", "ROUTER_ERROR")
-                                .put("message", error.getMessage() == null
-                                        ? error.getClass().getSimpleName()
-                                        : error.getMessage())));
-            } catch (Exception ignored) {}
+            sendProtocolError(session, frame, error);
         }
+    }
+
+    private void sendProtocolError(
+            DeviceSession session,
+            Frame frame,
+            Exception error) {
+        try {
+            session.connection.send(new Frame(
+                    Protocol.VERSION,
+                    Protocol.ERROR,
+                    session.nextSequence(),
+                    System.currentTimeMillis(),
+                    new JSONObject()
+                            .put("requestId",
+                                    frame.payload.optString(
+                                            "requestId", ""))
+                            .put("status", "error")
+                            .put("code", "ROUTER_ERROR")
+                            .put("message", error.getMessage() == null
+                                    ? error.getClass().getSimpleName()
+                                    : error.getMessage())));
+            session.lastTxMs = System.currentTimeMillis();
+        } catch (Exception ignored) {}
     }
     private void handleCommand(
             DeviceSession session,
