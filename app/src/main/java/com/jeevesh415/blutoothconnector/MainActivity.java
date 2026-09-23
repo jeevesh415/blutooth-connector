@@ -35,6 +35,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_PERMISSIONS = 100;
     private static final int REQUEST_LOCAL_NETWORK = 101;
+    private static final int REQUEST_WIFI_DIRECT = 102;
     private static final int REQUEST_FILE = 200;
 
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
@@ -194,6 +195,19 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        if (requestCode == REQUEST_WIFI_DIRECT) {
+            if (allGranted) {
+                if (service == null) ensureConnectionService();
+                if (service != null) service.startWifiDirect();
+                status.setText(
+                        "Wi-Fi Direct discovery started.");
+            } else {
+                status.setText(
+                        "Wi-Fi Direct permission was not granted.");
+            }
+            return;
+        }
+
         if (allGranted) {
             if (service != null) service.ensureBulkEndpoint();
             openFilePicker();
@@ -261,6 +275,16 @@ public final class MainActivity extends Activity {
         sendFile.setText("Send file to all connected devices");
         sendFile.setOnClickListener(v -> chooseFile());
         root.addView(sendFile, new LinearLayout.LayoutParams(-1, -2));
+
+        Button wifiDirect = new Button(this);
+        wifiDirect.setText("Start Wi-Fi Direct discovery");
+        wifiDirect.setOnClickListener(v -> startWifiDirect());
+        root.addView(wifiDirect, new LinearLayout.LayoutParams(-1, -2));
+
+        Button connectWifiPeer = new Button(this);
+        connectWifiPeer.setText("Connect first Wi-Fi Direct peer");
+        connectWifiPeer.setOnClickListener(v -> connectFirstWifiDirectPeer());
+        root.addView(connectWifiPeer, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -394,6 +418,71 @@ public final class MainActivity extends Activity {
             return;
         }
         requestLocalNetworkThenChooseFile();
+    }
+
+    private void startWifiDirect() {
+        ArrayList<String> missing = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(
+                    Manifest.permission.NEARBY_WIFI_DEVICES)
+                    != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+            }
+        } else if (Build.VERSION.SDK_INT >= 26) {
+            if (checkSelfPermission(
+                    Manifest.permission.ACCESS_FINE_LOCATION)
+                    != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+            }
+        }
+
+        if (!missing.isEmpty()) {
+            requestPermissions(
+                    missing.toArray(new String[0]),
+                    REQUEST_WIFI_DIRECT);
+            return;
+        }
+
+        if (service == null) {
+            ensureConnectionService();
+            status.setText(
+                    "Connection service is starting; retry Wi-Fi Direct shortly.");
+            return;
+        }
+
+        service.startWifiDirect();
+        updateStatus(
+                "Wi-Fi Direct discovery started. Keep Wi-Fi enabled on both devices.");
+    }
+
+    private void connectFirstWifiDirectPeer() {
+        if (service == null || service.wifiDirect() == null) {
+            status.setText(
+                    "Start Wi-Fi Direct discovery first.");
+            return;
+        }
+
+        java.util.List<android.net.wifi.p2p.WifiP2pDevice> candidates =
+                service.wifiDirect().peers();
+        if (candidates.isEmpty()) {
+            status.setText(
+                    "No Wi-Fi Direct app peers discovered yet.");
+            return;
+        }
+
+        android.net.wifi.p2p.WifiP2pDevice device = candidates.get(0);
+        service.wifiDirect().connect(device.deviceAddress);
+        updateStatus(
+                "Connecting Wi-Fi Direct: " + safeWifiName(device));
+    }
+
+    private static String safeWifiName(
+            android.net.wifi.p2p.WifiP2pDevice device) {
+        if (device == null) return "unknown";
+        return device.deviceName == null
+                ? "unknown"
+                : device.deviceName;
     }
 
     private void openFilePicker() {
