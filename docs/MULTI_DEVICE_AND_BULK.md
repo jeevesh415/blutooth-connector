@@ -2,108 +2,103 @@
 
 ## Topology
 
-Phone A can maintain independent control sessions to several Phone B peers.
+Phone A can maintain independent Bluetooth control sessions to several Phone B peers.
 
-For Bluetooth Classic, the implementation uses an application policy of at most 7 active peers. This matches the Bluetooth SIG's documented BR/EDR piconet figure; handset/controller implementations may support fewer concurrent links. The limit is an application safeguard, not a promise that every Android handset can maintain seven RFCOMM sessions.
+Each session owns:
+- one secure RFCOMM socket;
+- ordered control frames;
+- heartbeat and bounded reconnect state;
+- RTT metrics;
+- capability discovery;
+- its own transmit sequence.
 
-Each session owns its own:
+The application enforces a seven-peer policy for Bluetooth Classic. That is an application safeguard, not a promise that every handset can maintain seven RFCOMM links.
 
-- BluetoothSocket
-- framed control channel
-- heartbeat
-- reconnect state
-- RTT estimator
-- negotiated bulk endpoints
+The foreground ConnectionService owns the live transport graph. MainActivity binds to the service and only observes/commands it.
 
-The foreground ConnectionService owns the MultiDeviceManager so the Activity is no longer the owner of the live transport graph. Closing or recreating the UI therefore does not intentionally tear down every peer connection.
+## Control path
 
-## Reliability stack
+Bluetooth RFCOMM is the current interactive control path. Large data is deliberately kept away from it.
 
-Physical/link layer:
-Bluetooth's lower layers already provide link reliability.
+The connection uses Android's secure RFCOMM APIs. The Bluetooth platform performs link authentication and encryption when an authenticated link key can be established.
 
-Session layer:
-Every peer has a heartbeat every 5 seconds. A peer that produces no received traffic for 15 seconds is treated as unhealthy. Reconnect uses bounded exponential backoff:
+Every outbound frame gets a fresh monotonically increasing per-session sequence. Results and errors are assigned their own outbound sequence, so a slow command handler cannot emit an older sequence after a newer heartbeat and have its valid result discarded.
 
-1, 2, 4, 8, 16, 30, 30, ... seconds
+Commands carry a UUID requestId. Deduplication is scoped to the peer session namespace and expires after a bounded TTL.
 
-Application sequencing and idempotent command identifiers remain per ordered RFCOMM session.
+## Bulk path
 
-Bulk-data layer:
-Bulk transfer uses TCP where a mutually reachable private IPv4 endpoint is advertised. TCP supplies ordered reliable delivery; the application adds a random 256-bit endpoint token and final SHA-256 verification.
+Large objects use BCL3 over mutually reachable local IP networks.
 
-## Why Bluetooth is not the bulk path
+BCL3 provides:
+- 1 MiB chunks;
+- concurrent bounded in-flight work;
+- per-chunk acknowledgements;
+- retry of only the failed chunk;
+- random-access reconstruction;
+- whole-file SHA-256 verification;
+- HMAC-SHA256 authorization proof;
+- AES-256-GCM chunk encryption;
+- a fresh random 96-bit GCM IV for every chunk.
 
-BR/EDR bandwidth is shared at the physical-link level. Making several applications push large streams simultaneously over Bluetooth therefore competes for the same radio resources.
+The endpoint bearer secret is delivered through the secure Bluetooth control channel. It is not transmitted over the TCP connection.
 
-For large data, the preferred path is:
+The active TCP server rejects the legacy BCL1 protocol so an older plaintext transfer cannot bypass the BCL3 security model.
 
-Bluetooth control
-    |
-    +---- capability exchange ----+
-                                  |
-                         local TCP path(s)
-                                  |
-                           striped chunks
+## Adaptive multipath
 
-Each chunk is acknowledged independently, so a failed path can be retried without retransmitting successful chunks. The receiver writes completed chunks at explicit file offsets and only finalizes the object after whole-file SHA-256 verification.
+The sender treats each reachable endpoint/network combination as a candidate path.
+
+When Android exposes a matching Network object, the socket is created from that Network's SocketFactory. The sender therefore does not silently collapse all candidate paths onto the device's default network.
+
+The scheduler maintains short throughput/RTT histories and a Fourier-derived high-frequency instability term. Work is bounded to a small in-flight window so completed chunks can update the scheduler before later chunks are assigned.
+
+A path failure raises a failure estimate and immediately reduces its scheduling utility. Successful observations decay that penalty.
+
+The scheduling mathematics changes allocation decisions; it does not create bandwidth that the radio, chipset, AP, or operating system does not expose.
 
 ## Path independence
 
-The endpoint list is derived from active, non-virtual interfaces and private IPv4 addresses. Interface names are classified as:
+Network-interface labels are only metadata. Two endpoints can still share the same Wi-Fi radio, access point, channel, chipset queue, or physical route.
 
-- wifi-lan
-- wifi-direct
-- wifi-aware
-- ethernet
-- tcp-local
+Meaningful bandwidth aggregation therefore requires genuinely independent usable paths, for example separate Wi-Fi/peer-to-peer connectivity that Android actually exposes as distinct Network objects.
 
-The scheduler treats these as candidate path identities, but an interface label is not proof of an independent physical link. Two addresses can still traverse the same Wi-Fi radio, AP, chipset queue, or RF channel.
+## Failure model
 
-True aggregate throughput requires genuinely independent usable paths. The code therefore avoids claiming “zero lag” or guaranteed bandwidth multiplication.
-
-## Failure semantics
-
-If Bluetooth drops:
-- the affected session is closed;
-- the peer remains in the retry roster;
+Bluetooth failure:
+- current session closes;
+- other peer sessions continue;
 - reconnect uses bounded exponential backoff;
-- other peers continue independently.
+- commands waiting on the dead session fail rather than hanging forever.
 
-If one TCP path drops during a file transfer:
-- that chunk is retried;
+TCP path failure:
+- only the affected chunk is retried;
 - successful chunks remain valid;
-- other paths continue;
-- finalization still requires complete SHA-256 verification.
+- the scheduler penalizes the failing path;
+- final promotion requires complete-file hash verification.
 
-If integrity verification fails, the partial object is not promoted to the final filename.
+Incomplete receiver states are bounded and stale partial transfers are removed.
 
-## Performance quantities
+## Current Android networking boundary
 
-For a transfer of B bytes completed in Delta t:
+The repository can recognize Wi-Fi LAN, Wi-Fi Direct, Wi-Fi Aware, and Ethernet network types when Android exposes them. It does not claim that a path is active merely because an interface has a matching name.
 
-throughput_Mbps = 8 * B / Delta t / 1,000,000
+Wi-Fi Direct and Wi-Fi Aware still require their platform-specific discovery/session establishment APIs. A real two-phone test is required before those transports can be called production-ready.
 
-For N control requests:
+## Metrics
 
-delivery_rate = successful_results / N
+For control:
+- p50/p95/p99 RTT;
+- command completion rate;
+- reconnect time;
+- timeout rate.
 
-RTT sample:
+For bulk:
+- Mbps;
+- chunks completed per path;
+- retry rate;
+- path failure rate;
+- final integrity failures;
+- energy per MB.
 
-RTT_i = t_result_i - t_send_i
-
-Latency estimator:
-
-S_i = alpha * RTT_i + (1-alpha) * S_(i-1)
-
-The implementation exposes EWMA, standard deviation and p95 over a rolling sample window so thresholds can be tuned from measurements.
-
-## Next validation milestone
-
-The repository now has unit tests for framing, path allocation, and bulk-request encoding. The next runtime benchmark on two or more real Android devices should compare:
-
-1. Bluetooth control + single local TCP path.
-2. Bluetooth control + concurrent local TCP endpoints when they are actually independent.
-3. Bluetooth-only control under load.
-
-Measure median/p95/p99 command latency, sustained Mbps, chunk retry rate, reconnect time, path utilization, and energy/MB.
+The repository includes JVM coverage for framing, scheduler behavior, BCL request encoding, BCL3 cryptography/tamper detection, and a two-path loopback reconstruction test.
