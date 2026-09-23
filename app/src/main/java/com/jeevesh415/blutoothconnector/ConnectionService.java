@@ -9,9 +9,11 @@ import android.os.IBinder;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
 
+import com.jeevesh415.blutoothconnector.capability.CapabilityRegistry;
+import com.jeevesh415.blutoothconnector.capability.DeviceInfoCapability;
+import com.jeevesh415.blutoothconnector.protocol.CommandRouter;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
-import com.jeevesh415.blutoothconnector.transport.BulkTransferProtocol;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
@@ -27,6 +29,8 @@ public final class ConnectionService extends Service {
 
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
+    private final CapabilityRegistry registry = new CapabilityRegistry();
+    private final CommandRouter router = new CommandRouter(registry);
 
     @Override public void onCreate() {
         super.onCreate();
@@ -41,6 +45,8 @@ public final class ConnectionService extends Service {
             startForeground(NOTIFICATION_ID, notification());
         }
 
+        registry.register(new DeviceInfoCapability());
+
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter == null) return;
 
@@ -50,7 +56,7 @@ public final class ConnectionService extends Service {
                     new File(getFilesDir(), "transfers"),
                     new TcpBulkEndpoint.Listener() {
                         @Override public void onTransferComplete(File file) {
-                            // Future: publish an EVENT to all authenticated controllers.
+                            // Future: publish an EVENT after transfer authorization is added.
                         }
 
                         @Override public void onError(Exception error) {
@@ -71,12 +77,12 @@ public final class ConnectionService extends Service {
             }
 
             @Override public void onDisconnected(DeviceSession session, Exception error) {
-                // The manager performs bounded exponential reconnect.
+                // MultiDeviceManager handles exponential reconnect.
             }
 
             @Override public void onConnectError(android.bluetooth.BluetoothDevice device,
                                                  Exception error) {
-                // Connection diagnostics will be surfaced by the controller UI.
+                // Future: structured diagnostic event.
             }
         });
 
@@ -96,8 +102,26 @@ public final class ConnectionService extends Service {
                         frame.sequence,
                         System.currentTimeMillis(),
                         payload));
+            } else if (Protocol.COMMAND.equals(frame.type)) {
+                Frame result = router.route(frame);
+                session.connection.send(result);
             }
-        } catch (Exception ignored) {}
+        } catch (Exception error) {
+            try {
+                session.connection.send(new Frame(
+                        Protocol.VERSION,
+                        Protocol.ERROR,
+                        frame.sequence,
+                        System.currentTimeMillis(),
+                        new JSONObject()
+                                .put("requestId", frame.payload.optString("requestId", ""))
+                                .put("status", "error")
+                                .put("code", "ROUTER_ERROR")
+                                .put("message", error.getMessage() == null
+                                        ? error.getClass().getSimpleName()
+                                        : error.getMessage())));
+            } catch (Exception ignored) {}
+        }
     }
 
     private void sendCapabilities(DeviceSession session) {
@@ -107,7 +131,11 @@ public final class ConnectionService extends Service {
                     .put("maxBluetoothPeers", MultiDeviceManager.MAX_CLASSIC_PEERS)
                     .put("transports", new JSONArray()
                             .put("bluetooth-rfcomm")
-                            .put("tcp-local"));
+                            .put("tcp-local"))
+                    .put("capabilities", new JSONArray()
+                            .put("transport.ping")
+                            .put("device.info")
+                            .put("bulk.file-transfer"));
 
             JSONArray endpoints = new JSONArray();
             if (bulk != null) {
@@ -118,12 +146,7 @@ public final class ConnectionService extends Service {
                             .put("token", endpoint.tokenBase64));
                 }
             }
-
             payload.put("bulkEndpoints", endpoints);
-            payload.put("capabilities", new JSONArray()
-                    .put("transport.ping")
-                    .put("device.info")
-                    .put("bulk.file-transfer"));
 
             session.connection.send(new Frame(
                     Protocol.VERSION,
