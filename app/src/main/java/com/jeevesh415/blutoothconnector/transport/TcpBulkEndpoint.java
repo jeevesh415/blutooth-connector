@@ -93,7 +93,9 @@ public final class TcpBulkEndpoint implements AutoCloseable {
                 throw new java.io.IOException(
                         "Unsupported bulk protocol; BCL3 multipath is required");
             }
-            if (listener != null) listener.onTransferComplete(result);
+            if (result != null && listener != null) {
+                listener.onTransferComplete(result);
+            }
         } catch (Exception e) {
             if (listener != null) listener.onError(e);
         }
