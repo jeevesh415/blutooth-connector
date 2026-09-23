@@ -64,6 +64,7 @@ public final class BluetoothTransport implements AutoCloseable {
 
             BluetoothSocket socket = null;
             try {
+                adapter.cancelDiscovery();
                 socket = device.createRfcommSocketToServiceRecord(Protocol.RFCOMM_UUID);
                 socket.connect();
                 sockets.put(device.getAddress(), socket);
