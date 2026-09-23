@@ -6,6 +6,8 @@ import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.content.Intent;
 import android.content.pm.PackageManager;
+import android.database.Cursor;
+import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.view.Gravity;
@@ -21,6 +23,7 @@ import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 
 import org.json.JSONObject;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -28,6 +31,7 @@ import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH = 100;
+    private static final int REQUEST_FILE = 200;
 
     private final AtomicLong sequence = new AtomicLong();
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
@@ -137,6 +141,11 @@ public final class MainActivity extends Activity {
         infoAll.setText("Query all device info");
         infoAll.setOnClickListener(v -> queryAllDeviceInfo());
         root.addView(infoAll, new LinearLayout.LayoutParams(-1, -2));
+
+        Button sendFile = new Button(this);
+        sendFile.setText("Send file to all connected devices");
+        sendFile.setOnClickListener(v -> chooseFile());
+        root.addView(sendFile, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -255,6 +264,94 @@ public final class MainActivity extends Activity {
                             + ": " + frame.payload.toString());
                 }
             }));
+        }
+    }
+
+    private void chooseFile() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect at least one peer first.");
+            return;
+        }
+
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        intent.addCategory(Intent.CATEGORY_OPENABLE);
+        intent.setType("*/*");
+        startActivityForResult(intent, REQUEST_FILE);
+    }
+
+    @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode != REQUEST_FILE || resultCode != RESULT_OK || data == null
+                || data.getData() == null) {
+            return;
+        }
+
+        Uri uri = data.getData();
+        try {
+            File staged = stageUri(uri);
+            sendStagedFile(staged);
+        } catch (Exception error) {
+            status.setText("Could not stage file: " + error.getMessage());
+        }
+    }
+
+    private java.io.File stageUri(Uri uri) throws Exception {
+        String name = "upload-" + System.currentTimeMillis() + ".bin";
+        Cursor cursor = getContentResolver().query(
+                uri, new String[] {"_display_name"}, null, null, null);
+        if (cursor != null) {
+            try {
+                if (cursor.moveToFirst()) {
+                    String display = cursor.getString(0);
+                    if (display != null && !display.isEmpty()) {
+                        display = display.replaceAll("[^a-zA-Z0-9._-]", "_");
+                        name = display;
+                    }
+                }
+            } finally {
+                cursor.close();
+            }
+        }
+
+        java.io.File target = new java.io.File(getCacheDir(), name);
+        try (java.io.InputStream in = getContentResolver().openInputStream(uri);
+             java.io.OutputStream out = new java.io.BufferedOutputStream(
+                     new java.io.FileOutputStream(target),
+                     1024 * 1024)) {
+            if (in == null) throw new java.io.IOException("Cannot open selected file");
+            byte[] buffer = new byte[1024 * 1024];
+            int n;
+            while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n);
+        }
+        return target;
+    }
+
+    private void sendStagedFile(java.io.File file) {
+        int total = peers.sessions().size();
+        int[] complete = {0};
+
+        updateStatus("Sending " + file.getName() + " to " + total + " devices...");
+
+        for (DeviceSession session : peers.sessions()) {
+            peers.transferFile(session.address(), file, new MultiDeviceManager.TransferListener() {
+                @Override public void onComplete(DeviceSession peer, long bytes) {
+                    complete[0]++;
+                    runOnUiThread(() -> updateStatus(
+                            "Transfer complete: " + peer.device.getName()
+                                    + " (" + bytes + " bytes), "
+                                    + complete[0] + "/" + total));
+                    if (complete[0] == total) file.delete();
+                }
+
+                @Override public void onError(DeviceSession peer, Exception error) {
+                    complete[0]++;
+                    runOnUiThread(() -> updateStatus(
+                            "Transfer failed: " + safeName(peer.device)
+                                    + " - " + error.getMessage()
+                                    + " (" + complete[0] + "/" + total + ")"));
+                    if (complete[0] == total) file.delete();
+                }
+            });
         }
     }
 
