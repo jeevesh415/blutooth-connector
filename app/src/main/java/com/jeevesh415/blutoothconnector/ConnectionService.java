@@ -111,7 +111,7 @@ public final class ConnectionService extends Service {
                         new JSONObject().put(
                                 "t0", frame.payload.optLong("t0", 0))));
             } else if (Protocol.COMMAND.equals(frame.type)) {
-                Frame result = router.route(frame);
+                Frame result = router.route(frame, session.address());
                 session.connection.send(result);
             }
         } catch (Exception error) {
