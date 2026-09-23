@@ -39,6 +39,11 @@ public final class CommandRouter {
             return store(requestId, error(command, "CAPABILITY_NOT_FOUND", capabilityId));
         }
 
+        if (!capability.canHandle(command)) {
+            return store(requestId, error(command, "OPERATION_NOT_SUPPORTED",
+                    command.payload.optString("operation", "")));
+        }
+
         try {
             Frame result = capability.handle(command);
             Frame normalized = new Frame(
