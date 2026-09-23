@@ -147,7 +147,13 @@ public final class MultiDeviceManager implements AutoCloseable {
     public void broadcast(Frame frame) {
         for (DeviceSession session : sessions.values()) {
             try {
-                session.connection.send(frame);
+                Frame perSession = new Frame(
+                        frame.version,
+                        frame.type,
+                        session.nextSequence(),
+                        frame.timestampMs,
+                        frame.payload);
+                session.connection.send(perSession);
                 session.lastTxMs = System.currentTimeMillis();
             } catch (Exception e) {
                 closeSession(session, e);
@@ -185,7 +191,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                             }
                             current.lastRxMs = System.currentTimeMillis();
 
-                            if (Protocol.CAPABILITIES.equals(frame.type))
+                            if (Protocol.CAPABILITIES.equals(frame.type)) {
                                 current.bulkEndpoints.clear();
                                 org.json.JSONArray endpoints =
                                         frame.payload.optJSONArray("bulkEndpoints");
