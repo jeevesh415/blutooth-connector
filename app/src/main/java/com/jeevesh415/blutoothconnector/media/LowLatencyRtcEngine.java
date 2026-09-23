@@ -204,7 +204,7 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
         if (screenCapturer != null) return;
         if (projectionData == null) throw new IllegalArgumentException("projectionData");
 
-        videoSource = factory.createVideoSource(false);
+        videoSource = factory.createVideoSource(true);
         surfaceTextureHelper = SurfaceTextureHelper.create(
                 "BCL-screen-capture",
                 eglBase.getEglBaseContext());
