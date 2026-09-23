@@ -1,6 +1,10 @@
 package com.jeevesh415.blutoothconnector.transport;
 
-import java.io.File;\nimport java.io.BufferedInputStream;\nimport java.io.BufferedOutputStream;\nimport java.io.DataInputStream;\nimport java.io.DataOutputStream;
+import java.io.BufferedInputStream;
+import java.io.BufferedOutputStream;
+import java.io.DataInputStream;
+import java.io.DataOutputStream;
+import java.io.File;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -24,11 +28,17 @@ public final class TcpBulkEndpoint implements AutoCloseable {
         public final String host;
         public final int port;
         public final String tokenBase64;
+        public final String transport;
 
         public Endpoint(String host, int port, String tokenBase64) {
+            this(host, port, tokenBase64, "tcp-local");
+        }
+
+        public Endpoint(String host, int port, String tokenBase64, String transport) {
             this.host = host;
             this.port = port;
             this.tokenBase64 = tokenBase64;
+            this.transport = transport == null ? "tcp-local" : transport;
         }
     }
 
@@ -65,7 +75,23 @@ public final class TcpBulkEndpoint implements AutoCloseable {
     private void handle(Socket socket) {
         try (Socket s = socket) {
             s.setReceiveBufferSize(1024 * 1024);
-            File result = ReliableFileTransfer.receive(s, directory, token);
+            BufferedInputStream bufferedIn = new BufferedInputStream(s.getInputStream(), 1024 * 1024);
+            DataInputStream in = new DataInputStream(bufferedIn);
+            DataOutputStream out = new DataOutputStream(
+                    new BufferedOutputStream(s.getOutputStream(), 1024 * 1024));
+
+            bufferedIn.mark(4);
+            int magic = in.readInt();
+            bufferedIn.reset();
+
+            File result;
+            if (magic == 0x42434C32) {
+                result = MultipathReceiver.receive(in, out, directory, token);
+            } else if (magic == 0x42434C31) {
+                result = ReliableFileTransfer.receive(in, out, directory, token);
+            } else {
+                throw new java.io.IOException("Unknown bulk protocol");
+            }
             if (listener != null) listener.onTransferComplete(result);
         } catch (Exception e) {
             if (listener != null) listener.onError(e);
@@ -90,7 +116,8 @@ public final class TcpBulkEndpoint implements AutoCloseable {
                     InetAddress addr = addresses.nextElement();
                     if (addr instanceof Inet4Address && !addr.isLoopbackAddress()
                             && !addr.isLinkLocalAddress()) {
-                        result.add(new Endpoint(addr.getHostAddress(), port(), encoded, nif.getName()));
+                        result.add(new Endpoint(
+                                addr.getHostAddress(), port(), encoded, nif.getName()));
                     }
                 }
             }
