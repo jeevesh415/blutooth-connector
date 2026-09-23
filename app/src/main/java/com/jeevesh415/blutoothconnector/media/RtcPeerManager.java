@@ -1,7 +1,7 @@
 package com.jeevesh415.blutoothconnector.media;
 
 import android.content.Context;
-import android.media.projection.MediaProjection;
+import android.content.Intent;
 
 import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
@@ -43,7 +43,7 @@ public final class RtcPeerManager implements AutoCloseable {
     }
 
     public void startPublisher(DeviceSession session,
-                               MediaProjection projection,
+                               Intent projectionData,
                                int width,
                                int height,
                                int fps) {
@@ -52,7 +52,7 @@ public final class RtcPeerManager implements AutoCloseable {
         LowLatencyRtcEngine engine = create(session);
         try {
             engine.addMicrophone();
-            engine.startScreen(projection, width, height, fps);
+            engine.startScreen(projectionData, width, height, fps);
             engine.createControlChannel();
             engine.createOffer();
         } catch (Exception e) {
