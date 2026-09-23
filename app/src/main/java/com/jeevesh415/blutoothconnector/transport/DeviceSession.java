@@ -11,10 +11,12 @@ public final class DeviceSession {
     public final BluetoothDevice device;
     public final BluetoothSocket socket;
     public final FramedConnection connection;
+    public final ConnectionMetrics metrics = new ConnectionMetrics();
     public volatile State state = State.CONNECTED;
     public volatile long connectedAtMs;
     public volatile long lastRxMs;
     public volatile long lastTxMs;
+    public volatile long lastPingSentNs;
     public volatile int reconnectAttempt;
 
     public DeviceSession(BluetoothDevice device, BluetoothSocket socket,
