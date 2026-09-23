@@ -16,7 +16,9 @@ import java.nio.charset.StandardCharsets;
 import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
@@ -53,6 +55,16 @@ public final class MultipathFileTransfer {
             List<BulkEndpointInfo> endpoints,
             int maxAttempts) throws Exception {
         return send(null, file, endpoints, maxAttempts);
+    }
+
+    private static final class ChunkTransferResult {
+        final Candidate candidate;
+        final long bytes;
+
+        ChunkTransferResult(Candidate candidate, long bytes) {
+            this.candidate = candidate;
+            this.bytes = bytes;
+        }
     }
 
     private static final class ChunkOutcome {
@@ -275,10 +287,12 @@ public final class MultipathFileTransfer {
                     System.nanoTime();
 
             try {
-                long sent =
+                ChunkTransferResult sent =
                         sendChunk(
                                 file,
                                 candidate,
+                                scheduler,
+                                candidates,
                                 transferId,
                                 hash,
                                 index,
@@ -287,8 +301,8 @@ public final class MultipathFileTransfer {
                                 length,
                                 maxAttempts);
                 return new ChunkOutcome(
-                        candidate,
-                        sent,
+                        sent.candidate,
+                        sent.bytes,
                         System.nanoTime() - started,
                         null);
             } catch (Exception error) {
@@ -336,9 +350,11 @@ public final class MultipathFileTransfer {
         return candidates.get(chunk % candidates.size());
     }
 
-    private static long sendChunk(
+    private static ChunkTransferResult sendChunk(
             File file,
-            Candidate candidate,
+            Candidate initialCandidate,
+            SpectralPathScheduler scheduler,
+            List<Candidate> candidates,
             String transferId,
             byte[] hash,
             int chunkIndex,
@@ -347,23 +363,42 @@ public final class MultipathFileTransfer {
             long length,
             int maxAttempts) throws Exception {
         Exception last = null;
+        Candidate candidate = initialCandidate;
+        Set<String> failedPaths = new HashSet<>();
 
         for (int attempt = 1;
                 attempt <= maxAttempts;
                 attempt++) {
             try {
-                return sendChunkOnce(
-                        file,
-                        candidate,
-                        transferId,
-                        hash,
-                        chunkIndex,
-                        chunkCount,
-                        offset,
-                        length);
+                long sent =
+                        sendChunkOnce(
+                                file,
+                                candidate,
+                                transferId,
+                                hash,
+                                chunkIndex,
+                                chunkCount,
+                                offset,
+                                length);
+                return new ChunkTransferResult(
+                        candidate, sent);
             } catch (Exception error) {
                 last = error;
+                scheduler.path(
+                        candidate.pathId,
+                        candidate.endpoint.transport)
+                        .observeFailure();
+                failedPaths.add(candidate.pathId);
+
                 if (attempt == maxAttempts) break;
+
+                candidate = chooseAlternative(
+                        scheduler,
+                        candidates,
+                        failedPaths,
+                        chunkIndex,
+                        attempt);
+
                 try {
                     Thread.sleep(Math.min(
                             2000L,
@@ -379,6 +414,64 @@ public final class MultipathFileTransfer {
                 ? new java.io.IOException(
                         "Chunk transfer failed")
                 : last;
+    }
+
+    private static Candidate chooseAlternative(
+            SpectralPathScheduler scheduler,
+            List<Candidate> candidates,
+            Set<String> failedPaths,
+            int chunk,
+            int attempt) {
+        if (failedPaths.size() >= candidates.size()) {
+            failedPaths.clear();
+            return chooseCandidate(
+                    scheduler,
+                    candidates,
+                    chunk + attempt * 7919);
+        }
+
+        List<SpectralPathScheduler.Allocation> allocations =
+                scheduler.allocate();
+        if (!allocations.isEmpty()) {
+            double total = 0;
+            for (SpectralPathScheduler.Allocation allocation
+                    : allocations) {
+                if (!failedPaths.contains(allocation.pathId)) {
+                    total += allocation.fraction;
+                }
+            }
+
+            if (total > 0) {
+                double target =
+                        ((chunk + attempt * 0.5)
+                                * 0.6180339887498949) % 1.0;
+                double cumulative = 0;
+
+                for (SpectralPathScheduler.Allocation allocation
+                        : allocations) {
+                    if (failedPaths.contains(allocation.pathId)) {
+                        continue;
+                    }
+                    cumulative += allocation.fraction / total;
+                    if (target <= cumulative) {
+                        for (Candidate candidate : candidates) {
+                            if (candidate.pathId.equals(
+                                    allocation.pathId)) {
+                                return candidate;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        for (Candidate candidate : candidates) {
+            if (!failedPaths.contains(candidate.pathId)) {
+                return candidate;
+            }
+        }
+        return candidates.get(
+                chunk % candidates.size());
     }
 
     private static long sendChunkOnce(
