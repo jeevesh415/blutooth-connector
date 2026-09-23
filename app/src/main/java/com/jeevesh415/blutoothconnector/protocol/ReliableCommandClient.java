@@ -6,21 +6,25 @@ import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.TimeUnit;
+import java.util.function.LongSupplier;
 
 public final class ReliableCommandClient implements AutoCloseable {
     public interface Sender {
         void send(Frame frame) throws Exception;
     }
 
+    private static final long DEFAULT_FINAL_TIMEOUT_MS = 8000;
+    private static final long MIN_FINAL_TIMEOUT_MS = 3000;
+    private static final long MAX_FINAL_TIMEOUT_MS = 30000;
     private static final long RETRY_BASE_MS = 400;
     private static final int MAX_ATTEMPTS = 4;
-    private static final long FINAL_TIMEOUT_MS = 8000;
 
     private final Sender sender;
+    private final LongSupplier timeoutSupplier;
     private final Map<String, Pending> pending = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler =
             Executors.newScheduledThreadPool(2);
@@ -45,15 +49,39 @@ public final class ReliableCommandClient implements AutoCloseable {
     }
 
     public ReliableCommandClient(Sender sender) {
+        this(sender, () -> DEFAULT_FINAL_TIMEOUT_MS);
+    }
+
+    public ReliableCommandClient(Sender sender, LongSupplier timeoutSupplier) {
+        if (sender == null) throw new IllegalArgumentException("sender");
         this.sender = sender;
+        this.timeoutSupplier = timeoutSupplier == null
+                ? () -> DEFAULT_FINAL_TIMEOUT_MS
+                : timeoutSupplier;
     }
 
     public CompletableFuture<Frame> execute(
             long sequence, String capability, String operation, JSONObject arguments) {
+        if (capability == null || capability.isEmpty()) {
+            CompletableFuture<Frame> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new IllegalArgumentException("Capability is required"));
+            return failed;
+        }
+        if (operation == null || operation.isEmpty()) {
+            CompletableFuture<Frame> failed = new CompletableFuture<>();
+            failed.completeExceptionally(
+                    new IllegalArgumentException("Operation is required"));
+            return failed;
+        }
+
         String requestId = UUID.randomUUID().toString();
         CompletableFuture<Frame> future = new CompletableFuture<>();
         Pending state = new Pending(
-                future, sequence, capability, operation,
+                future,
+                sequence,
+                capability,
+                operation,
                 arguments == null ? new JSONObject() : arguments);
         pending.put(requestId, state);
 
@@ -66,7 +94,7 @@ public final class ReliableCommandClient implements AutoCloseable {
                 current.future.completeExceptionally(
                         new java.io.IOException("Command timed out: " + requestId));
             }
-        }, FINAL_TIMEOUT_MS, TimeUnit.MILLISECONDS);
+        }, finalTimeoutMs(), TimeUnit.MILLISECONDS);
 
         future.whenComplete((ok, error) -> {
             Pending current = pending.remove(requestId);
@@ -75,6 +103,25 @@ public final class ReliableCommandClient implements AutoCloseable {
             }
         });
         return future;
+    }
+
+    private long adaptiveTimeoutMs() {
+        long adaptive;
+        try {
+            adaptive = timeoutSupplier.getAsLong();
+        } catch (Exception ignored) {
+            adaptive = DEFAULT_FINAL_TIMEOUT_MS;
+        }
+        return Math.max(
+                1000L,
+                Math.min(MAX_FINAL_TIMEOUT_MS, adaptive));
+    }
+
+    private long finalTimeoutMs() {
+        long adaptive = adaptiveTimeoutMs();
+        return Math.max(
+                MIN_FINAL_TIMEOUT_MS,
+                Math.min(MAX_FINAL_TIMEOUT_MS, adaptive * MAX_ATTEMPTS));
     }
 
     private void sendAttempt(String requestId, Pending state) {
@@ -103,16 +150,21 @@ public final class ReliableCommandClient implements AutoCloseable {
         }
 
         if (state.attempts < MAX_ATTEMPTS && !state.future.isDone()) {
-            long delay = RETRY_BASE_MS *
-                    (1L << Math.min(state.attempts - 1, 3));
+            long delayBase = Math.max(
+                    RETRY_BASE_MS,
+                    Math.min(2000L, adaptiveTimeoutMs() / 4));
+            long delay = delayBase * (1L << Math.min(state.attempts - 1, 2));
             state.retryTask = scheduler.schedule(
                     () -> sendAttempt(requestId, state),
-                    delay, TimeUnit.MILLISECONDS);
+                    delay,
+                    TimeUnit.MILLISECONDS);
         }
     }
 
     public boolean accept(Frame frame) {
-        if (!Protocol.RESULT.equals(frame.type) && !Protocol.ERROR.equals(frame.type)) {
+        if (frame == null
+                || (!Protocol.RESULT.equals(frame.type)
+                && !Protocol.ERROR.equals(frame.type))) {
             return false;
         }
 
