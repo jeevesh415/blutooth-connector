@@ -9,16 +9,10 @@ import java.util.List;
 import java.util.Map;
 
 /**
- * Adaptive path scheduler using a small spectral model.
+ * Adaptive path scheduler with a small spectral model.
  *
- * The transport graph is treated as a weighted graph.  For each path we keep
- * a short time series of throughput/RTT observations.  A discrete Fourier
- * projection separates the slowly varying component from high-frequency
- * instability.  The scheduler then allocates work using a softmax utility.
- *
- * This is intentionally an application-layer scheduler: it cannot change the
- * phone's PHY or Wi-Fi channel width.  It can, however, decide how much work
- * to put on each independently usable path.
+ * The scheduler is deliberately application-layer: it allocates work among
+ * paths exposed by Android and cannot create PHY bandwidth or path independence.
  */
 public final class SpectralPathScheduler {
     public static final class Path {
@@ -28,61 +22,105 @@ public final class SpectralPathScheduler {
         private final Deque<Double> rtt = new ArrayDeque<>();
         private double ewmaRate;
         private double ewmaRtt = 50.0;
+        private double failureEwma;
 
         public Path(String id, String kind) {
             this.id = id;
-            this.kind = kind;
+            this.kind = kind == null ? "unknown" : kind;
         }
 
-        public synchronized void observe(double bytesPerSecond, double rttMs) {
+        public synchronized void observe(
+                double bytesPerSecond, double rttMs) {
             if (bytesPerSecond > 0) {
-                ewmaRate = ewmaRate == 0 ? bytesPerSecond : 0.2 * bytesPerSecond + 0.8 * ewmaRate;
+                ewmaRate = ewmaRate == 0
+                        ? bytesPerSecond
+                        : 0.2 * bytesPerSecond
+                                + 0.8 * ewmaRate;
                 push(rate, bytesPerSecond);
             }
+
             if (rttMs >= 0) {
-                ewmaRtt = 0.2 * rttMs + 0.8 * ewmaRtt;
+                ewmaRtt = 0.2 * rttMs
+                        + 0.8 * ewmaRtt;
                 push(rtt, rttMs);
             }
+
+            failureEwma *= 0.70;
         }
 
-        private static void push(Deque<Double> q, double value) {
+        public synchronized void observeFailure() {
+            failureEwma =
+                    0.35 + 0.65 * failureEwma;
+        }
+
+        public synchronized double failureRateEstimate() {
+            return failureEwma;
+        }
+
+        private static void push(
+                Deque<Double> q, double value) {
             q.addLast(value);
-            while (q.size() > 32) q.removeFirst();
+            while (q.size() > 32) {
+                q.removeFirst();
+            }
         }
 
         private synchronized double instability() {
-            return spectralHighFrequencyEnergy(rate) + 0.25 * spectralHighFrequencyEnergy(rtt);
+            return spectralHighFrequencyEnergy(rate)
+                    + 0.25
+                    * spectralHighFrequencyEnergy(rtt);
         }
 
-        private static double spectralHighFrequencyEnergy(Deque<Double> values) {
+        private static double spectralHighFrequencyEnergy(
+                Deque<Double> values) {
             int n = values.size();
             if (n < 4) return 0.0;
+
             Double[] x = values.toArray(new Double[0]);
-            double mean = 0;
+            double mean = 0.0;
             for (double v : x) mean += v;
             mean /= n;
 
-            double total = 0;
-            double high = 0;
+            double total = 0.0;
+            double high = 0.0;
+
             for (int k = 1; k < n / 2; k++) {
-                double re = 0, im = 0;
+                double re = 0.0;
+                double im = 0.0;
                 for (int t = 0; t < n; t++) {
                     double centered = x[t] - mean;
-                    double a = 2.0 * Math.PI * k * t / n;
-                    re += centered * Math.cos(a);
-                    im -= centered * Math.sin(a);
+                    double angle =
+                            2.0 * Math.PI * k * t / n;
+                    re += centered * Math.cos(angle);
+                    im -= centered * Math.sin(angle);
                 }
-                double e = (re * re + im * im) / (n * n);
-                total += e;
-                if (k >= n / 4) high += e;
+
+                double energy =
+                        (re * re + im * im)
+                                / (n * n);
+                total += energy;
+                if (k >= n / 4) high += energy;
             }
+
             return total == 0 ? 0 : high / total;
         }
 
         synchronized double utility() {
-            double rateScore = Math.log1p(Math.max(0, ewmaRate));
-            double latencyPenalty = Math.log1p(Math.max(0, ewmaRtt));
-            return rateScore - 0.35 * latencyPenalty - 0.8 * instability();
+            double rateScore =
+                    Math.log1p(
+                            Math.max(0, ewmaRate));
+            double latencyPenalty =
+                    Math.log1p(
+                            Math.max(0, ewmaRtt));
+            double instabilityPenalty =
+                    0.8 * instability();
+            double failurePenalty =
+                    1.5 * failureEwma;
+
+            return rateScore
+                    - 0.35 * latencyPenalty
+                    - instabilityPenalty
+                    - failurePenalty;
         }
     }
 
@@ -96,32 +134,61 @@ public final class SpectralPathScheduler {
         }
     }
 
-    private final Map<String, Path> paths = new HashMap<>();
+    private final Map<String, Path> paths =
+            new HashMap<>();
 
-    public synchronized Path path(String id, String kind) {
-        return paths.computeIfAbsent(id, ignored -> new Path(id, kind));
+    public synchronized Path path(
+            String id, String kind) {
+        if (id == null || id.isEmpty()) {
+            throw new IllegalArgumentException("path id");
+        }
+        return paths.computeIfAbsent(
+                id,
+                ignored -> new Path(id, kind));
     }
 
     public synchronized List<Allocation> allocate() {
-        if (paths.isEmpty()) return new ArrayList<>();
-
-        double max = Double.NEGATIVE_INFINITY;
-        for (Path p : paths.values()) max = Math.max(max, p.utility());
-
-        double denominator = 0;
-        Map<Path, Double> weights = new HashMap<>();
-        for (Path p : paths.values()) {
-            double w = Math.exp(Math.max(-20, Math.min(20, p.utility() - max)));
-            weights.put(p, w);
-            denominator += w;
+        if (paths.isEmpty()) {
+            return new ArrayList<>();
         }
 
-        List<Path> sorted = new ArrayList<>(paths.values());
-        sorted.sort(Comparator.comparingDouble(Path::utility).reversed());
+        double max =
+                Double.NEGATIVE_INFINITY;
+        for (Path path : paths.values()) {
+            max = Math.max(max, path.utility());
+        }
 
-        List<Allocation> result = new ArrayList<>();
-        for (Path p : sorted) {
-            result.add(new Allocation(p.id, denominator == 0 ? 0 : weights.get(p) / denominator));
+        double denominator = 0.0;
+        Map<Path, Double> weights =
+                new HashMap<>();
+
+        for (Path path : paths.values()) {
+            double weight = Math.exp(
+                    Math.max(
+                            -20,
+                            Math.min(
+                                    20,
+                                    path.utility() - max)));
+            weights.put(path, weight);
+            denominator += weight;
+        }
+
+        List<Path> sorted =
+                new ArrayList<>(paths.values());
+        sorted.sort(
+                Comparator.comparingDouble(
+                        Path::utility).reversed());
+
+        List<Allocation> result =
+                new ArrayList<>(sorted.size());
+        for (Path path : sorted) {
+            result.add(
+                    new Allocation(
+                            path.id,
+                            denominator == 0
+                                    ? 0
+                                    : weights.get(path)
+                                            / denominator));
         }
         return result;
     }

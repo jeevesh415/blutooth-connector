@@ -55,6 +55,24 @@ public final class MultipathFileTransfer {
         return send(null, file, endpoints, maxAttempts);
     }
 
+    private static final class ChunkOutcome {
+        final Candidate candidate;
+        final long bytes;
+        final long durationNanos;
+        final Exception error;
+
+        ChunkOutcome(
+                Candidate candidate,
+                long bytes,
+                long durationNanos,
+                Exception error) {
+            this.candidate = candidate;
+            this.bytes = bytes;
+            this.durationNanos = durationNanos;
+            this.error = error;
+        }
+    }
+
     public static long send(
             Context context,
             File file,
@@ -96,7 +114,8 @@ public final class MultipathFileTransfer {
                         ? Collections.emptyList()
                         : catalog.snapshot();
 
-        List<Candidate> candidates = new ArrayList<>();
+        List<Candidate> candidates =
+                new ArrayList<>();
         for (BulkEndpointInfo endpoint : endpoints) {
             if (endpoint == null
                     || endpoint.host == null
@@ -110,6 +129,7 @@ public final class MultipathFileTransfer {
                 if (!endpoint.transport.equals(path.kind)) {
                     continue;
                 }
+
                 candidates.add(new Candidate(
                         endpoint,
                         path.network,
@@ -119,6 +139,7 @@ public final class MultipathFileTransfer {
                                 + "@" + path.id));
                 matched = true;
             }
+
             if (!matched) {
                 candidates.add(new Candidate(
                         endpoint,
@@ -136,6 +157,7 @@ public final class MultipathFileTransfer {
 
         SpectralPathScheduler scheduler =
                 new SpectralPathScheduler();
+
         for (Candidate candidate : candidates) {
             scheduler.path(
                     candidate.pathId,
@@ -146,60 +168,72 @@ public final class MultipathFileTransfer {
         int workers = Math.min(
                 candidates.size() * 2,
                 Math.max(1, chunkCount));
+
         ExecutorService pool =
                 Executors.newFixedThreadPool(workers);
+        java.util.concurrent.CompletionService<ChunkOutcome>
+                completion =
+                new java.util.concurrent.ExecutorCompletionService<>(
+                        pool);
+
+        int nextChunk = 0;
+        int inFlight = 0;
+        long total = 0;
 
         try {
-            List<Future<Long>> futures =
-                    new ArrayList<>(chunkCount);
-
-            for (int chunk = 0;
-                    chunk < chunkCount;
-                    chunk++) {
-                final int index = chunk;
-                futures.add(pool.submit(() -> {
-                    Candidate candidate =
-                            chooseCandidate(
-                                    scheduler,
-                                    candidates,
-                                    index);
-                    long offset =
-                            (long) index * CHUNK;
-                    long length =
-                            Math.min(
-                                    CHUNK,
-                                    file.length() - offset);
-                    long started =
-                            System.nanoTime();
-
-                    long sent = sendChunk(
-                            file,
-                            candidate,
-                            transferId,
-                            hash,
-                            index,
-                            chunkCount,
-                            offset,
-                            length,
-                            maxAttempts);
-
-                    double seconds = Math.max(
-                            1e-6,
-                            (System.nanoTime() - started)
-                                    / 1e9);
-                    scheduler.path(
-                            candidate.pathId,
-                            candidate.endpoint.transport)
-                            .observe(
-                                    sent / seconds,
-                                    -1);
-                    return sent;
-                }));
+            while (nextChunk < chunkCount
+                    && inFlight < workers) {
+                submitChunk(
+                        completion,
+                        scheduler,
+                        candidates,
+                        file,
+                        transferId,
+                        hash,
+                        nextChunk++,
+                        chunkCount,
+                        maxAttempts);
+                inFlight++;
             }
 
-            long total = 0;
-            for (Future<Long> future : futures) {
-                total += future.get();
+            while (inFlight > 0) {
+                ChunkOutcome outcome =
+                        completion.take().get();
+                inFlight--;
+
+                SpectralPathScheduler.Path path =
+                        scheduler.path(
+                                outcome.candidate.pathId,
+                                outcome.candidate.endpoint.transport);
+
+                if (outcome.error != null) {
+                    path.observeFailure();
+                    throw outcome.error;
+                }
+
+                double seconds =
+                        Math.max(
+                                1e-6,
+                                outcome.durationNanos
+                                        / 1e9);
+                path.observe(
+                        outcome.bytes / seconds,
+                        -1);
+                total += outcome.bytes;
+
+                if (nextChunk < chunkCount) {
+                    submitChunk(
+                            completion,
+                            scheduler,
+                            candidates,
+                            file,
+                            transferId,
+                            hash,
+                            nextChunk++,
+                            chunkCount,
+                            maxAttempts);
+                    inFlight++;
+                }
             }
 
             if (total != file.length()) {
@@ -212,6 +246,59 @@ public final class MultipathFileTransfer {
         } finally {
             pool.shutdownNow();
         }
+    }
+
+    private static void submitChunk(
+            java.util.concurrent.CompletionService<ChunkOutcome>
+                    completion,
+            SpectralPathScheduler scheduler,
+            List<Candidate> candidates,
+            File file,
+            String transferId,
+            byte[] hash,
+            int index,
+            int chunkCount,
+            int maxAttempts) {
+        completion.submit(() -> {
+            Candidate candidate =
+                    chooseCandidate(
+                            scheduler,
+                            candidates,
+                            index);
+            long offset =
+                    (long) index * CHUNK;
+            long length =
+                    Math.min(
+                            CHUNK,
+                            file.length() - offset);
+            long started =
+                    System.nanoTime();
+
+            try {
+                long sent =
+                        sendChunk(
+                                file,
+                                candidate,
+                                transferId,
+                                hash,
+                                index,
+                                chunkCount,
+                                offset,
+                                length,
+                                maxAttempts);
+                return new ChunkOutcome(
+                        candidate,
+                        sent,
+                        System.nanoTime() - started,
+                        null);
+            } catch (Exception error) {
+                return new ChunkOutcome(
+                        candidate,
+                        0,
+                        System.nanoTime() - started,
+                        error);
+            }
+        });
     }
 
     private static Candidate chooseCandidate(
