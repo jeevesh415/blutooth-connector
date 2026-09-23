@@ -6,6 +6,9 @@ import android.app.NotificationManager;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.net.ConnectivityManager;
+import android.net.Network;
+import android.net.NetworkRequest;
 import android.os.Binder;
 import android.os.IBinder;
 import android.content.Intent;
@@ -42,6 +45,8 @@ public final class ConnectionService extends Service {
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
     private WifiDirectPathManager wifiDirect;
+    private ConnectivityManager connectivityManager;
+    private ConnectivityManager.NetworkCallback networkCallback;
 
     private final java.util.concurrent.ExecutorService
             commandExecutor =
@@ -147,6 +152,52 @@ public final class ConnectionService extends Service {
         try {
             peers.startReceiver();
         } catch (Exception ignored) {}
+
+        registerNetworkTopologyMonitor();
+    }
+
+    @SuppressWarnings("MissingPermission")
+    private synchronized void registerNetworkTopologyMonitor() {
+        if (networkCallback != null) return;
+
+        connectivityManager =
+                (ConnectivityManager) getSystemService(
+                        ConnectivityManager.class);
+        if (connectivityManager == null) return;
+
+        networkCallback = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network network) {
+                refreshCapabilities();
+            }
+
+            @Override public void onLost(Network network) {
+                refreshCapabilities();
+            }
+
+            @Override public void onLinkPropertiesChanged(
+                    Network network,
+                    android.net.LinkProperties properties) {
+                refreshCapabilities();
+            }
+        };
+
+        try {
+            connectivityManager.registerNetworkCallback(
+                    new NetworkRequest.Builder().build(),
+                    networkCallback);
+        } catch (Exception error) {
+            networkCallback = null;
+        }
+    }
+
+    private synchronized void unregisterNetworkTopologyMonitor() {
+        if (connectivityManager == null || networkCallback == null) return;
+        try {
+            connectivityManager.unregisterNetworkCallback(
+                    networkCallback);
+        } catch (Exception ignored) {}
+        networkCallback = null;
+        connectivityManager = null;
     }
 
     public synchronized void ensureBulkEndpoint() {
@@ -385,6 +436,7 @@ public final class ConnectionService extends Service {
 
     @Override public void onDestroy() {
         commandExecutor.shutdownNow();
+        unregisterNetworkTopologyMonitor();
 
         if (wifiDirect != null) {
             wifiDirect.close();
