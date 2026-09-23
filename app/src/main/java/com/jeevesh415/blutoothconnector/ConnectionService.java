@@ -119,7 +119,7 @@ public final class ConnectionService extends Service {
                 session.connection.send(new Frame(
                         Protocol.VERSION,
                         Protocol.ERROR,
-                        frame.sequence,
+                        session.nextSequence(),
                         System.currentTimeMillis(),
                         new JSONObject()
                                 .put("requestId",
