@@ -6,61 +6,75 @@ import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothServerSocket;
 import android.bluetooth.BluetoothSocket;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
+
 import java.io.IOException;
+import java.util.Map;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 public final class BluetoothTransport implements AutoCloseable {
     public interface Listener {
-        void onConnected(BluetoothSocket socket);
-        void onError(Exception error);
+        void onConnected(BluetoothDevice device, BluetoothSocket socket, boolean incoming);
+        void onError(BluetoothDevice device, Exception error);
     }
 
     private final BluetoothAdapter adapter;
     private final Listener listener;
-    private BluetoothServerSocket serverSocket;
-    private BluetoothSocket socket;
+    private final Map<String, BluetoothSocket> sockets = new ConcurrentHashMap<>();
+    private final ExecutorService connectExecutor = Executors.newCachedThreadPool();
+    private volatile BluetoothServerSocket serverSocket;
+    private volatile boolean running;
 
     public BluetoothTransport(BluetoothAdapter adapter, Listener listener) {
+        if (adapter == null) throw new IllegalArgumentException("Bluetooth adapter is null");
         this.adapter = adapter;
         this.listener = listener;
     }
 
     @SuppressLint("MissingPermission")
-    public void listen() throws IOException {
-        closeServer();
+    public synchronized void listen() throws IOException {
+        if (running) return;
         serverSocket = adapter.listenUsingRfcommWithServiceRecord(
                 "Blutooth Connector", Protocol.RFCOMM_UUID);
-        Thread t = new Thread(() -> {
-            while (serverSocket != null) {
+        running = true;
+
+        connectExecutor.execute(() -> {
+            while (running) {
                 try {
                     BluetoothSocket accepted = serverSocket.accept();
-                    socket = accepted;
-                    listener.onConnected(accepted);
+                    BluetoothDevice device = accepted.getRemoteDevice();
+                    sockets.put(device.getAddress(), accepted);
+                    listener.onConnected(device, accepted, true);
                 } catch (Exception e) {
-                    if (serverSocket != null) listener.onError(e);
-                    break;
+                    if (running) listener.onError(null, e);
                 }
             }
-        }, "bluetooth-rfcomm-server");
-        t.start();
+        });
     }
 
     @SuppressLint("MissingPermission")
     public void connect(BluetoothDevice device) {
-        Thread t = new Thread(() -> {
+        if (device == null) return;
+        connectExecutor.execute(() -> {
+            BluetoothSocket previous = sockets.get(device.getAddress());
+            if (previous != null && previous.isConnected()) return;
+
+            BluetoothSocket socket = null;
             try {
-                closeServer();
-                BluetoothSocket outgoing =
-                        device.createRfcommSocketToServiceRecord(Protocol.RFCOMM_UUID);
-                outgoing.connect();
-                socket = outgoing;
-                listener.onConnected(outgoing);
+                socket = device.createRfcommSocketToServiceRecord(Protocol.RFCOMM_UUID);
+                socket.connect();
+                sockets.put(device.getAddress(), socket);
+                listener.onConnected(device, socket, false);
             } catch (Exception e) {
-                listener.onError(e);
+                if (socket != null) {
+                    try { socket.close(); } catch (IOException ignored) {}
+                }
+                listener.onError(device, e);
             }
-        }, "bluetooth-rfcomm-client");
-        t.start();
+        });
     }
 
     @SuppressLint("MissingPermission")
@@ -68,7 +82,23 @@ public final class BluetoothTransport implements AutoCloseable {
         return adapter.getBondedDevices();
     }
 
-    private void closeServer() {
+    public int connectedCount() {
+        return sockets.size();
+    }
+
+    public void disconnect(String address) {
+        BluetoothSocket socket = sockets.remove(address);
+        if (socket != null) {
+            try { socket.close(); } catch (IOException ignored) {}
+        }
+    }
+
+    public void forgetSocket(String address, BluetoothSocket socket) {
+        sockets.remove(address, socket);
+    }
+
+    private synchronized void closeServer() {
+        running = false;
         if (serverSocket != null) {
             try { serverSocket.close(); } catch (IOException ignored) {}
             serverSocket = null;
@@ -78,9 +108,10 @@ public final class BluetoothTransport implements AutoCloseable {
     @Override
     public void close() {
         closeServer();
-        if (socket != null) {
+        for (BluetoothSocket socket : sockets.values()) {
             try { socket.close(); } catch (IOException ignored) {}
-            socket = null;
         }
+        sockets.clear();
+        connectExecutor.shutdownNow();
     }
 }
