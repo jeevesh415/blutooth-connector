@@ -89,10 +89,9 @@ public final class TcpBulkEndpoint implements AutoCloseable {
             File result;
             if (magic == 0x42434C32) {
                 result = MultipathReceiver.receive(in, out, directory, token);
-            } else if (magic == 0x42434C31) {
-                result = ReliableFileTransfer.receive(in, out, directory, token);
             } else {
-                throw new java.io.IOException("Unknown bulk protocol");
+                throw new java.io.IOException(
+                        "Unsupported bulk protocol; BCL3 multipath is required");
             }
             if (listener != null) listener.onTransferComplete(result);
         } catch (Exception e) {
