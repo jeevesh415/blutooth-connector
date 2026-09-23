@@ -40,6 +40,8 @@ public final class ConnectionService extends Service {
     private TcpBulkEndpoint bulk;
     private final ScheduledExecutorService capabilityRefresh =
             Executors.newSingleThreadScheduledExecutor();
+    private final java.util.concurrent.ExecutorService commandExecutor =
+            Executors.newFixedThreadPool(4);
 
     public final class LocalBinder extends Binder {
         public ConnectionService service() {
@@ -158,6 +160,52 @@ public final class ConnectionService extends Service {
             } catch (Exception ignored) {}
         }
     }
+    private void handleCommand(
+            DeviceSession session,
+            Frame frame) {
+        synchronized (session.commandLock) {
+            try {
+                Frame result =
+                        router.route(
+                                frame,
+                                session.address());
+                session.connection.send(new Frame(
+                        result.version,
+                        result.type,
+                        session.nextSequence(),
+                        result.timestampMs,
+                        result.payload));
+                session.lastTxMs =
+                        System.currentTimeMillis();
+            } catch (Exception error) {
+                try {
+                    session.connection.send(new Frame(
+                            Protocol.VERSION,
+                            Protocol.ERROR,
+                            session.nextSequence(),
+                            System.currentTimeMillis(),
+                            new JSONObject()
+                                    .put(
+                                            "requestId",
+                                            frame.payload.optString(
+                                                    "requestId",
+                                                    ""))
+                                    .put(
+                                            "status",
+                                            "error")
+                                    .put(
+                                            "code",
+                                            "ROUTER_ERROR")
+                                    .put(
+                                            "message",
+                                            error.getMessage() == null
+                                                    ? error.getClass()
+                                                            .getSimpleName()
+                                                    : error.getMessage())));
+                } catch (Exception ignored) {}
+            }
+        }
+    }
 
     private void sendCapabilities(DeviceSession session) {
         try {
@@ -216,6 +264,7 @@ public final class ConnectionService extends Service {
 
     @Override public void onDestroy() {
         capabilityRefresh.shutdownNow();
+        commandExecutor.shutdownNow();
         if (peers != null) peers.close();
         if (bulk != null) bulk.close();
         super.onDestroy();
