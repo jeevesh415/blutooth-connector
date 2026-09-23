@@ -249,6 +249,8 @@ public final class MultipathReceiver {
                     "Transfer metadata conflict");
         }
 
+        File completedFile = null;
+
         synchronized (state.lock) {
             state.lastTouchedMs =
                     System.currentTimeMillis();
@@ -303,11 +305,12 @@ public final class MultipathReceiver {
                             "Cannot finalize received file");
                 }
                 STATES.remove(stateKey);
+                completedFile = state.finalFile;
             }
         }
 
         writeResponse(out, 0, length);
-        return state.finalFile;
+        return completedFile;
     }
 
     private static void writeResponse(
