@@ -15,12 +15,15 @@ import android.widget.TextView;
 
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
+import com.jeevesh415.blutoothconnector.protocol.ReliableCommandClient;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 
 import org.json.JSONObject;
 
 import java.util.ArrayList;
+import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
@@ -31,6 +34,8 @@ public final class MainActivity extends Activity {
 
     private TextView status;
     private MultiDeviceManager peers;
+    private final Map<String, ReliableCommandClient> commandClients =
+            new ConcurrentHashMap<>();
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -58,6 +63,8 @@ public final class MainActivity extends Activity {
 
         peers = new MultiDeviceManager(adapter, new MultiDeviceManager.Listener() {
             @Override public void onConnected(DeviceSession session) {
+                commandClients.put(session.address(),
+                        new ReliableCommandClient(frame -> session.connection.send(frame)));
                 runOnUiThread(() -> updateStatus(
                         "Connected peers: " + peers.sessions().size()
                                 + "\n" + safeName(session.device)
@@ -125,6 +132,11 @@ public final class MainActivity extends Activity {
         pingAll.setText("PING all connected devices");
         pingAll.setOnClickListener(v -> pingAll());
         root.addView(pingAll, new LinearLayout.LayoutParams(-1, -2));
+
+        Button infoAll = new Button(this);
+        infoAll.setText("Query all device info");
+        infoAll.setOnClickListener(v -> queryAllDeviceInfo());
+        root.addView(infoAll, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -219,6 +231,33 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void queryAllDeviceInfo() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("No connected peers.");
+            return;
+        }
+
+        for (DeviceSession session : peers.sessions()) {
+            ReliableCommandClient client = commandClients.get(session.address());
+            if (client == null) continue;
+
+            client.execute(
+                    sequence.incrementAndGet(),
+                    "device.info",
+                    "get",
+                    null
+            ).whenComplete((frame, error) -> runOnUiThread(() -> {
+                if (error != null) {
+                    updateStatus("Device info failed for " + safeName(session.device)
+                            + ": " + error.getMessage());
+                } else {
+                    updateStatus("Device info from " + safeName(session.device)
+                            + ": " + frame.payload.toString());
+                }
+            }));
+        }
+    }
+
     private void updateStatus(String value) {
         if (status != null) status.setText(value);
     }
@@ -237,6 +276,8 @@ public final class MainActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        for (ReliableCommandClient client : commandClients.values()) client.close();
+        commandClients.clear();
         if (peers != null) peers.close();
         super.onDestroy();
     }
