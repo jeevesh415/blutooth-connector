@@ -1,6 +1,9 @@
 package com.jeevesh415.blutoothconnector;
 
 import android.app.Activity;
+import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.content.pm.PackageManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
@@ -93,16 +96,46 @@ public final class WebDashboardActivity extends Activity {
 
         @android.webkit.JavascriptInterface
         public String scan() {
-            Intent intent = new Intent(WebDashboardActivity.this, MainActivity.class);
-            startActivity(intent);
-            return "Opening native Bluetooth scanner…";
+            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            if (adapter == null) return "Bluetooth unavailable.";
+            if (android.os.Build.VERSION.SDK_INT >= 31
+                    && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) {
+                return "Bluetooth permission is required. Open the native screen once to grant it.";
+            }
+            try {
+                StringBuilder out = new StringBuilder("Paired devices: ");
+                java.util.Set<BluetoothDevice> devices = adapter.getBondedDevices();
+                out.append(devices.size());
+                for (BluetoothDevice device : devices) {
+                    out.append("\\n- ").append(device.getName()).append(" [")
+                            .append(device.getAddress()).append("]");
+                }
+                return out.toString();
+            } catch (Exception e) {
+                return "Bluetooth scan failed: " + e.getMessage();
+            }
         }
 
         @android.webkit.JavascriptInterface
         public String connect() {
             ensureReady();
             if (peers == null) return "Connection service is not ready.";
-            return "Use the native scanner to select/refresh paired devices, then connect all.";
+            BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+            if (adapter == null) return "Bluetooth unavailable.";
+            if (android.os.Build.VERSION.SDK_INT >= 31
+                    && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    != PackageManager.PERMISSION_GRANTED) {
+                return "Bluetooth permission is required.";
+            }
+            try {
+                java.util.ArrayList<BluetoothDevice> devices =
+                        new java.util.ArrayList<>(adapter.getBondedDevices());
+                peers.connectAll(devices);
+                return "Connection attempts started for " + devices.size() + " paired devices.";
+            } catch (Exception e) {
+                return "Connect failed: " + e.getMessage();
+            }
         }
 
         @android.webkit.JavascriptInterface
