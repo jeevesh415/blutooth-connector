@@ -7,6 +7,7 @@ import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
 import android.content.Intent;
 import android.os.IBinder;
+import android.content.pm.ServiceInfo;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.transport.BluetoothTransport;
@@ -22,7 +23,12 @@ public final class ConnectionService extends Service {
     @Override public void onCreate() {
         super.onCreate();
         createNotificationChannel();
-        startForeground(NOTIFICATION_ID, notification());
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            startForeground(NOTIFICATION_ID, notification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE);
+        } else {
+            startForeground(NOTIFICATION_ID, notification());
+        }
 
         BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
         if (adapter == null) return;
@@ -30,16 +36,17 @@ public final class ConnectionService extends Service {
         transport = new BluetoothTransport(adapter, new BluetoothTransport.Listener() {
             @Override public void onConnected(android.bluetooth.BluetoothSocket socket) {
                 try {
-                    FramedConnection connection = new FramedConnection(
+                    final FramedConnection[] holder = new FramedConnection[1];
+                    holder[0] = new FramedConnection(
                             socket.getInputStream(), socket.getOutputStream(),
                             new FramedConnection.Listener() {
                                 @Override public void onFrame(Frame frame) {
-                                    handleFrame(connection, frame);
+                                    handleFrame(holder[0], frame);
                                 }
                                 @Override public void onClosed(Exception error) {}
                             });
-                    connection.startReader();
-                    connection.send(new Frame(
+                    holder[0].startReader();
+                    holder[0].send(new Frame(
                             Protocol.VERSION, Protocol.HELLO,
                             sequence.incrementAndGet(), System.currentTimeMillis(),
                             new org.json.JSONObject().put("role", "receiver")));
