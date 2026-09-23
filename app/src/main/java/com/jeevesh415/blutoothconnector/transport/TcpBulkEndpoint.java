@@ -1,6 +1,6 @@
 package com.jeevesh415.blutoothconnector.transport;
 
-import java.io.File;
+import java.io.File;\nimport java.io.BufferedInputStream;\nimport java.io.BufferedOutputStream;\nimport java.io.DataInputStream;\nimport java.io.DataOutputStream;
 import java.net.Inet4Address;
 import java.net.InetAddress;
 import java.net.NetworkInterface;
@@ -90,7 +90,7 @@ public final class TcpBulkEndpoint implements AutoCloseable {
                     InetAddress addr = addresses.nextElement();
                     if (addr instanceof Inet4Address && !addr.isLoopbackAddress()
                             && !addr.isLinkLocalAddress()) {
-                        result.add(new Endpoint(addr.getHostAddress(), port(), encoded));
+                        result.add(new Endpoint(addr.getHostAddress(), port(), encoded, nif.getName()));
                     }
                 }
             }
