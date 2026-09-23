@@ -41,6 +41,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, BluetoothDevice> knownDevices = new ConcurrentHashMap<>();
     private final Map<String, Integer> retryAttempts = new ConcurrentHashMap<>();
+    private final Map<String, Boolean> connecting = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler =
             Executors.newScheduledThreadPool(2);
     private final java.util.concurrent.ExecutorService bulkExecutor =
@@ -79,8 +80,11 @@ public final class MultiDeviceManager implements AutoCloseable {
             throw new IllegalStateException(
                     "Application peer limit reached: " + MAX_CLASSIC_PEERS);
         }
-        knownDevices.put(device.getAddress(), device);
-        transport.connect(device);
+        String address = device.getAddress();
+        knownDevices.put(address, device);
+        if (connecting.putIfAbsent(address, Boolean.TRUE) == null) {
+            transport.connect(device);
+        }
     }
 
     public void connectAll(Collection<BluetoothDevice> devices) {
@@ -153,6 +157,13 @@ public final class MultiDeviceManager implements AutoCloseable {
     private void attach(BluetoothDevice device, BluetoothSocket socket) {
         final String address = device.getAddress();
         knownDevices.put(address, device);
+        connecting.remove(address);
+
+        if (sessions.size() >= MAX_CLASSIC_PEERS && !sessions.containsKey(address)) {
+            try { socket.close(); } catch (Exception ignored) {}
+            retryLater(device);
+            return;
+        }
 
         DeviceSession old = sessions.remove(address);
         if (old != null) {
@@ -224,6 +235,7 @@ public final class MultiDeviceManager implements AutoCloseable {
         } catch (Exception e) {
             try { socket.close(); } catch (Exception ignored) {}
             transport.forgetSocket(address, socket);
+            connecting.remove(address);
             retryLater(device);
             if (listener != null) listener.onConnectError(device, e);
         }
@@ -270,7 +282,10 @@ public final class MultiDeviceManager implements AutoCloseable {
         int attempt = retryAttempts.merge(address, 1, Integer::sum);
         long delay = Math.min(30, 1L << Math.min(attempt - 1, 4));
         scheduler.schedule(() -> {
-            if (!closed && !sessions.containsKey(address)) transport.connect(device);
+            if (!closed && !sessions.containsKey(address)
+                    && connecting.putIfAbsent(address, Boolean.TRUE) == null) {
+                transport.connect(device);
+            }
         }, delay, TimeUnit.SECONDS);
     }
 
@@ -291,5 +306,6 @@ public final class MultiDeviceManager implements AutoCloseable {
         sessions.clear();
         knownDevices.clear();
         retryAttempts.clear();
+        connecting.clear();
     }
 }
