@@ -220,6 +220,18 @@ public final class MultipathReceiver {
                     "Decrypted chunk length mismatch");
         }
 
+        File finalCandidate =
+                new File(directory, safeName);
+        if (finalCandidate.isFile()
+                && finalCandidate.length() == fileSize) {
+            byte[] existingHash =
+                    BulkTransferProtocol.sha256(finalCandidate);
+            if (MessageDigest.isEqual(existingHash, hash)) {
+                writeResponse(out, 0, length);
+                return finalCandidate;
+            }
+        }
+
         String stateKey =
                 transferId + ":" + BulkTransferProtocol.hex(hash);
         State state = STATES.computeIfAbsent(
