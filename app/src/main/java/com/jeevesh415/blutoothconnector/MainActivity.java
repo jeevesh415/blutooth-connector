@@ -273,7 +273,7 @@ public final class MainActivity extends Activity {
             peers.broadcast(new Frame(
                     Protocol.VERSION,
                     Protocol.PING,
-                    sequence.incrementAndGet(),
+                    0,
                     System.currentTimeMillis(),
                     new JSONObject().put("t0", now)));
             updateStatus("PING broadcast to " + peers.sessions().size() + " peers.");
@@ -293,7 +293,7 @@ public final class MainActivity extends Activity {
             if (client == null) continue;
 
             client.execute(
-                    sequence.incrementAndGet(),
+                    session.nextSequence(),
                     "device.info",
                     "get",
                     null
