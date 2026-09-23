@@ -72,7 +72,7 @@ public final class ReliableFileTransfer {
         throw last;
     }
 
-    public static File receive(Socket socket, File directory, byte[] expectedToken) throws Exception {
+    public static File receive(Socket socket, File directory, byte[] expectedToken) throws Exception {\n        DataInputStream in = new DataInputStream(\n                new java.io.BufferedInputStream(socket.getInputStream(), BulkTransferProtocol.BUFFER_BYTES));\n        DataOutputStream out = new DataOutputStream(\n                new java.io.BufferedOutputStream(socket.getOutputStream(), BulkTransferProtocol.BUFFER_BYTES));\n        return receive(in, out, directory, expectedToken);\n    }\n\n    public static File receive(DataInputStream in, DataOutputStream out, File directory, byte[] expectedToken) throws Exception {
         if (!directory.exists() && !directory.mkdirs()) {
             throw new java.io.IOException("Cannot create transfer directory");
         }
