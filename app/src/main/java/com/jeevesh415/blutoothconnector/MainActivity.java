@@ -37,6 +37,10 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_LOCAL_NETWORK = 101;
     private static final int REQUEST_WIFI_DIRECT = 102;
     private static final int REQUEST_FILE = 200;
+    private static final int REQUEST_SCREEN_CAPTURE = 300;
+    private static final int REQUEST_RECORD_AUDIO = 301;
+
+    private String pendingStreamPeer;
 
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
     private final Map<String, ReliableCommandClient> commandClients =
@@ -190,6 +194,12 @@ public final class MainActivity extends Activity {
             }
         }
 
+        if (requestCode == REQUEST_RECORD_AUDIO) {
+            if (allGranted) requestScreenCapture();
+            else status.setText("Microphone permission is required for A/V streaming.");
+            return;
+        }
+
         if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
             if (allGranted) {
                 ensureConnectionService();
@@ -303,6 +313,11 @@ public final class MainActivity extends Activity {
         webDashboard.setOnClickListener(v ->
                 startActivity(new Intent(this, WebDashboardActivity.class)));
         root.addView(webDashboard, new LinearLayout.LayoutParams(-1, -2));
+
+        Button streamScreen = new Button(this);
+        streamScreen.setText("Stream screen + microphone to first peer");
+        streamScreen.setOnClickListener(v -> startScreenStream());
+        root.addView(streamScreen, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -512,6 +527,38 @@ public final class MainActivity extends Activity {
                 : device.deviceName;
     }
 
+    private void startScreenStream() {
+        if (service == null || peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect at least one peer first.");
+            return;
+        }
+        DeviceSession first = peers.sessions().iterator().next();
+        pendingStreamPeer = first.address();
+
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.RECORD_AUDIO},
+                    REQUEST_RECORD_AUDIO);
+            return;
+        }
+        requestScreenCapture();
+    }
+
+    private void requestScreenCapture() {
+        android.media.projection.MediaProjectionManager manager =
+                (android.media.projection.MediaProjectionManager)
+                        getSystemService(MEDIA_PROJECTION_SERVICE);
+        if (manager == null) {
+            status.setText("MediaProjection is unavailable.");
+            return;
+        }
+        startActivityForResult(
+                manager.createScreenCaptureIntent(),
+                REQUEST_SCREEN_CAPTURE);
+        status.setText("Approve Android's screen-capture prompt.");
+    }
+
     private void openFilePicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -521,6 +568,23 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_SCREEN_CAPTURE) {
+            if (resultCode != RESULT_OK || data == null || pendingStreamPeer == null) {
+                status.setText("Screen capture was not granted.");
+                return;
+            }
+            try {
+                service.startScreenShare(
+                        pendingStreamPeer,
+                        resultCode,
+                        data);
+                status.setText("Screen + microphone streaming started.");
+            } catch (Exception error) {
+                status.setText("Could not start stream: " + safeError(error));
+            }
+            return;
+        }
+
         if (requestCode != REQUEST_FILE || resultCode != RESULT_OK || data == null
                 || data.getData() == null) {
             return;
