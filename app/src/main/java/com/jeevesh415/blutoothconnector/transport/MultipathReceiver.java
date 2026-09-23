@@ -8,6 +8,9 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.BitSet;
 import java.util.Map;
@@ -100,6 +103,9 @@ public final class MultipathReceiver {
         in.readFully(idBytes);
         String transferId =
                 new String(idBytes, StandardCharsets.UTF_8);
+        if (!transferId.matches("[A-Za-z0-9._-]{1,64}")) {
+            throw new java.io.IOException("Invalid transfer id");
+        }
 
         long fileSize = in.readLong();
         long offset = in.readLong();
@@ -234,23 +240,15 @@ public final class MultipathReceiver {
 
         String stateKey =
                 transferId + ":" + BulkTransferProtocol.hex(hash);
-        State state = STATES.computeIfAbsent(
+        State state = getOrCreateState(
+                directory,
                 stateKey,
-                ignored -> {
-                    File part = new File(
-                            directory,
-                            BulkTransferProtocol.hex(hash)
-                                    + "-" + transferId + ".part");
-                    File finalFile =
-                            new File(directory, safeName);
-                    return new State(
-                            part,
-                            finalFile,
-                            originalName,
-                            fileSize,
-                            hash,
-                            chunkCount);
-                });
+                transferId,
+                safeName,
+                originalName,
+                fileSize,
+                hash,
+                chunkCount);
 
         if (state.fileSize != fileSize
                 || state.chunkCount != chunkCount
@@ -288,6 +286,7 @@ public final class MultipathReceiver {
                     }
                 }
                 state.complete.set(chunkIndex);
+                persistState(state);
             }
 
             boolean finished =
@@ -317,12 +316,194 @@ public final class MultipathReceiver {
                             "Cannot finalize received file");
                 }
                 STATES.remove(stateKey);
+                deleteMetadata(state);
                 completedFile = state.finalFile;
             }
         }
 
         writeResponse(out, 0, length);
         return completedFile;
+    }
+
+    private static State getOrCreateState(
+            File directory,
+            String stateKey,
+            String transferId,
+            String safeName,
+            String originalName,
+            long fileSize,
+            byte[] hash,
+            int chunkCount) throws java.io.IOException {
+        State existing = STATES.get(stateKey);
+        if (existing != null) {
+            return existing;
+        }
+
+        File part = new File(
+                directory,
+                BulkTransferProtocol.hex(hash)
+                        + "-" + transferId + ".part");
+        File finalFile = new File(directory, safeName);
+
+        State loaded = loadState(
+                part,
+                finalFile,
+                originalName,
+                fileSize,
+                hash,
+                chunkCount);
+
+        State raced = STATES.putIfAbsent(stateKey, loaded);
+        return raced == null ? loaded : raced;
+    }
+
+    private static State loadState(
+            File part,
+            File finalFile,
+            String originalName,
+            long fileSize,
+            byte[] hash,
+            int chunkCount) throws java.io.IOException {
+        State state = new State(
+                part,
+                finalFile,
+                originalName,
+                fileSize,
+                hash,
+                chunkCount);
+
+        File metadata = metadataFile(part);
+        if (!metadata.isFile()) {
+            return state;
+        }
+
+        try (DataInputStream in =
+                     new DataInputStream(
+                             new java.io.BufferedInputStream(
+                                     new java.io.FileInputStream(
+                                             metadata),
+                                     16 * 1024))) {
+            if (in.readInt() != 0x42434D31
+                    || in.readInt() != VERSION
+                    || in.readLong() != fileSize
+                    || in.readInt() != chunkCount) {
+                throw new java.io.IOException(
+                        "Invalid transfer metadata");
+            }
+
+            int hashLength = in.readInt();
+            if (hashLength != hash.length) {
+                throw new java.io.IOException(
+                        "Transfer metadata hash mismatch");
+            }
+
+            byte[] storedHash = new byte[hashLength];
+            in.readFully(storedHash);
+            if (!MessageDigest.isEqual(storedHash, hash)) {
+                throw new java.io.IOException(
+                        "Transfer metadata belongs to another file");
+            }
+
+            int nameLength = in.readInt();
+            if (nameLength <= 0 || nameLength > MAX_NAME) {
+                throw new java.io.IOException(
+                        "Invalid transfer metadata name");
+            }
+
+            byte[] storedName = new byte[nameLength];
+            in.readFully(storedName);
+            String storedOriginalName =
+                    new String(storedName, StandardCharsets.UTF_8);
+            if (!storedOriginalName.equals(originalName)) {
+                throw new java.io.IOException(
+                        "Transfer metadata name mismatch");
+            }
+
+            int bitmapLength = in.readInt();
+            if (bitmapLength < 0
+                    || bitmapLength > ((chunkCount + 7) / 8) + 1024) {
+                throw new java.io.IOException(
+                        "Invalid transfer bitmap");
+            }
+
+            byte[] bitmap = new byte[bitmapLength];
+            in.readFully(bitmap);
+            state.complete.or(BitSet.valueOf(bitmap));
+
+            if (part.exists() && part.length() > fileSize) {
+                throw new java.io.IOException(
+                        "Partial file exceeds declared size");
+            }
+
+            state.lastTouchedMs =
+                    Math.max(
+                            state.lastTouchedMs,
+                            metadata.lastModified());
+            return state;
+        } catch (Exception error) {
+            // Corrupt metadata must never cause acceptance of stale
+            // completion state. Start safely from an empty bitmap.
+            try { metadata.delete(); } catch (Exception ignored) {}
+            state.complete.clear();
+            return state;
+        }
+    }
+
+    private static void persistState(State state)
+            throws java.io.IOException {
+        File metadata = metadataFile(state.part);
+        File temp = new File(
+                metadata.getPath() + ".tmp");
+
+        byte[] bitmap = state.complete.toByteArray();
+        byte[] name =
+                state.originalName.getBytes(StandardCharsets.UTF_8);
+
+        try (DataOutputStream out =
+                     new DataOutputStream(
+                             new java.io.BufferedOutputStream(
+                                     new java.io.FileOutputStream(
+                                             temp),
+                                     16 * 1024))) {
+            out.writeInt(0x42434D31);
+            out.writeInt(VERSION);
+            out.writeLong(state.fileSize);
+            out.writeInt(state.chunkCount);
+            out.writeInt(state.hash.length);
+            out.write(state.hash);
+            out.writeInt(name.length);
+            out.write(name);
+            out.writeInt(bitmap.length);
+            out.write(bitmap);
+            out.flush();
+        }
+
+        try {
+            Files.move(
+                    temp.toPath(),
+                    metadata.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            Files.move(
+                    temp.toPath(),
+                    metadata.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
+        }
+    }
+
+    private static File metadataFile(State state) {
+        return metadataFile(state.part);
+    }
+
+    private static File metadataFile(File part) {
+        return new File(part.getPath() + ".meta");
+    }
+
+    private static void deleteMetadata(State state) {
+        try {
+            metadataFile(state).delete();
+        } catch (Exception ignored) {}
     }
 
     private static void writeResponse(
@@ -355,6 +536,7 @@ public final class MultipathReceiver {
                     if (state.part.exists()) {
                         state.part.delete();
                     }
+                    deleteMetadata(state);
                 }
             }
         }
