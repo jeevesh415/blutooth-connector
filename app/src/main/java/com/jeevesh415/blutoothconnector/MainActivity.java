@@ -46,6 +46,7 @@ public final class MainActivity extends Activity {
     private ConnectionService service;
     private MultiDeviceManager peers;
     private boolean bound;
+    private boolean pendingWifiDirectStart;
 
     private final MultiDeviceManager.Listener uiListener = new MultiDeviceManager.Listener() {
         @Override public void onConnected(DeviceSession session) {
@@ -98,6 +99,11 @@ public final class MainActivity extends Activity {
                 for (DeviceSession session : peers.sessions()) {
                     attachCommandClient(session);
                 }
+            }
+            if (pendingWifiDirectStart && service != null) {
+                pendingWifiDirectStart = false;
+                service.startWifiDirect();
+                updateStatus("Wi-Fi Direct discovery started.");
             }
             updateStatus(bound
                     ? "Connection service ready."
@@ -171,7 +177,8 @@ public final class MainActivity extends Activity {
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_BLUETOOTH_PERMISSIONS
-                && requestCode != REQUEST_LOCAL_NETWORK) {
+                && requestCode != REQUEST_LOCAL_NETWORK
+                && requestCode != REQUEST_WIFI_DIRECT) {
             return;
         }
 
@@ -197,11 +204,16 @@ public final class MainActivity extends Activity {
 
         if (requestCode == REQUEST_WIFI_DIRECT) {
             if (allGranted) {
-                if (service == null) ensureConnectionService();
-                if (service != null) service.startWifiDirect();
+                pendingWifiDirectStart = true;
+                ensureConnectionService();
+                if (service != null) {
+                    pendingWifiDirectStart = false;
+                    service.startWifiDirect();
+                }
                 status.setText(
-                        "Wi-Fi Direct discovery started.");
+                        "Wi-Fi Direct discovery starting.");
             } else {
+                pendingWifiDirectStart = false;
                 status.setText(
                         "Wi-Fi Direct permission was not granted.");
             }
@@ -437,7 +449,15 @@ public final class MainActivity extends Activity {
             }
         }
 
+        if (Build.VERSION.SDK_INT >= 37
+                && checkSelfPermission(
+                        Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
+
         if (!missing.isEmpty()) {
+            pendingWifiDirectStart = true;
             requestPermissions(
                     missing.toArray(new String[0]),
                     REQUEST_WIFI_DIRECT);
@@ -445,9 +465,10 @@ public final class MainActivity extends Activity {
         }
 
         if (service == null) {
+            pendingWifiDirectStart = true;
             ensureConnectionService();
             status.setText(
-                    "Connection service is starting; retry Wi-Fi Direct shortly.");
+                    "Connection service is starting; Wi-Fi Direct will start when ready.");
             return;
         }
 
