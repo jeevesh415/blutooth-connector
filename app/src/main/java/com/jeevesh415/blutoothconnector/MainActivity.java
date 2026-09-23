@@ -152,7 +152,8 @@ public final class MainActivity extends Activity {
         transport = new BluetoothTransport(adapter, new BluetoothTransport.Listener() {
             @Override public void onConnected(android.bluetooth.BluetoothSocket socket) {
                 try {
-                    connection = new FramedConnection(
+                    final FramedConnection[] holder = new FramedConnection[1];
+                    holder[0] = new FramedConnection(
                             socket.getInputStream(), socket.getOutputStream(),
                             new FramedConnection.Listener() {
                                 @Override public void onFrame(Frame frame) {
@@ -164,6 +165,7 @@ public final class MainActivity extends Activity {
                                     runOnUiThread(() -> status.setText("Connection closed."));
                                 }
                             });
+                    connection = holder[0];
                     connection.startReader();
 
                     org.json.JSONObject hello = new org.json.JSONObject()
