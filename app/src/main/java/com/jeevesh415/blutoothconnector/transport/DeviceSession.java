@@ -19,6 +19,7 @@ public final class DeviceSession {
     public final List<BulkEndpointInfo> bulkEndpoints = new CopyOnWriteArrayList<>();
 
     private final AtomicLong txSequence = new AtomicLong(0);
+    public final Object commandLock = new Object();
 
     public volatile State state = State.CONNECTED;
     public volatile long connectedAtMs;
