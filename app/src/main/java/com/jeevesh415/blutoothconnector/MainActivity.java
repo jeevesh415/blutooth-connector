@@ -4,12 +4,15 @@ import android.Manifest;
 import android.app.Activity;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
+import android.content.ComponentName;
 import android.content.Intent;
+import android.content.ServiceConnection;
 import android.content.pm.PackageManager;
 import android.database.Cursor;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.IBinder;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
@@ -27,52 +30,124 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.concurrent.atomic.AtomicLong;
 
 public final class MainActivity extends Activity {
-    private static final int REQUEST_BLUETOOTH = 100;
+    private static final int REQUEST_PERMISSIONS = 100;
     private static final int REQUEST_FILE = 200;
 
-    private final AtomicLong sequence = new AtomicLong();
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
-
-    private TextView status;
-    private MultiDeviceManager peers;
     private final Map<String, ReliableCommandClient> commandClients =
             new ConcurrentHashMap<>();
+
+    private TextView status;
+    private ConnectionService service;
+    private MultiDeviceManager peers;
+    private boolean bound;
+
+    private final MultiDeviceManager.Listener uiListener = new MultiDeviceManager.Listener() {
+        @Override public void onConnected(DeviceSession session) {
+            attachCommandClient(session);
+            runOnUiThread(() -> updateStatus(
+                    "Connected peers: " + peerCount()
+                            + "\n" + safeName(session.device)
+                            + "\nRTT EWMA: " + format(session.metrics.ewmaMs()) + " ms"
+                            + "\np95: " + session.metrics.p95Ms() + " ms"));
+        }
+
+        @Override public void onFrame(DeviceSession session, Frame frame) {
+            runOnUiThread(() -> updateStatus(
+                    "Peers: " + peerCount()
+                            + "\nLast: " + safeName(session.device)
+                            + " -> " + frame.type
+                            + "\nRTT EWMA: " + format(session.metrics.ewmaMs()) + " ms"
+                            + "\np95: " + session.metrics.p95Ms() + " ms"));
+        }
+
+        @Override public void onDisconnected(DeviceSession session, Exception error) {
+            ReliableCommandClient old = commandClients.remove(session.address());
+            if (old != null) old.close();
+            runOnUiThread(() -> updateStatus(
+                    "Reconnecting: " + safeName(session.device)
+                            + "\nConnected peers: " + peerCount()));
+        }
+
+        @Override public void onConnectError(BluetoothDevice device, Exception error) {
+            runOnUiThread(() -> updateStatus(
+                    "Connect error: " + safeName(device)
+                            + "\n" + safeError(error)));
+        }
+    };
+
+    private final ServiceConnection serviceConnection = new ServiceConnection() {
+        @Override public void onServiceConnected(ComponentName name, IBinder binder) {
+            ConnectionService.LocalBinder local =
+                    (ConnectionService.LocalBinder) binder;
+            service = local.service();
+            peers = service.peers();
+            bound = peers != null;
+            if (peers != null) {
+                peers.addListener(uiListener);
+                for (DeviceSession session : peers.sessions()) {
+                    attachCommandClient(session);
+                }
+            }
+            updateStatus(bound
+                    ? "Connection service ready."
+                    : "Connection service is starting.");
+        }
+
+        @Override public void onServiceDisconnected(ComponentName name) {
+            bound = false;
+            service = null;
+            peers = null;
+            closeCommandClients();
+            updateStatus("Connection service disconnected.");
+        }
+    };
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         buildUi();
-
         requestRequiredPermissions();
     }
 
     private void requestRequiredPermissions() {
-        java.util.ArrayList<String> permissions = new java.util.ArrayList<>();
+        ArrayList<String> permissions = new ArrayList<>();
 
         if (Build.VERSION.SDK_INT >= 31) {
             permissions.add(Manifest.permission.BLUETOOTH_SCAN);
             permissions.add(Manifest.permission.BLUETOOTH_CONNECT);
             permissions.add(Manifest.permission.BLUETOOTH_ADVERTISE);
         }
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            permissions.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+        } else if (Build.VERSION.SDK_INT >= 26) {
+            permissions.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+
         if (Build.VERSION.SDK_INT >= 37) {
             permissions.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
         }
 
-        if (permissions.isEmpty()) {
-            initPeerManager();
+        ArrayList<String> missing = new ArrayList<>();
+        for (String permission : permissions) {
+            if (checkSelfPermission(permission) != PackageManager.PERMISSION_GRANTED) {
+                missing.add(permission);
+            }
+        }
+
+        if (missing.isEmpty()) {
+            ensureConnectionService();
         } else {
-            requestPermissions(
-                    permissions.toArray(new String[0]),
-                    REQUEST_BLUETOOTH);
+            requestPermissions(missing.toArray(new String[0]), REQUEST_PERMISSIONS);
         }
     }
 
     @Override public void onRequestPermissionsResult(
             int requestCode, String[] permissions, int[] grantResults) {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        if (requestCode != REQUEST_BLUETOOTH) return;
+        if (requestCode != REQUEST_PERMISSIONS) return;
 
         boolean allGranted = true;
         for (int result : grantResults) {
@@ -83,62 +158,22 @@ public final class MainActivity extends Activity {
         }
 
         if (allGranted) {
-            initPeerManager();
-            status.setText("Required permissions granted.");
+            ensureConnectionService();
+            status.setText("Permissions granted. Connection service starting.");
         } else {
-            status.setText("Bluetooth/local-network permission is required for the enabled features.");
+            status.setText("Required nearby-device/network permissions were not granted.");
         }
     }
 
-    private boolean hasLocalNetworkPermission() {
-        return Build.VERSION.SDK_INT < 37 ||
-                checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK)
-                        == PackageManager.PERMISSION_GRANTED;
-    }
-
-    private void initPeerManager() {
-        if (peers != null) return;
-
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter == null) {
-            status.setText("Bluetooth is unavailable.");
-            return;
+    private void ensureConnectionService() {
+        Intent intent = new Intent(this, ConnectionService.class);
+        try {
+            if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
+            else startService(intent);
+            bindService(intent, serviceConnection, BIND_AUTO_CREATE);
+        } catch (Exception error) {
+            status.setText("Could not start connection service: " + safeError(error));
         }
-
-        peers = new MultiDeviceManager(adapter, new MultiDeviceManager.Listener() {
-            @Override public void onConnected(DeviceSession session) {
-                commandClients.put(session.address(),
-                        new ReliableCommandClient(frame -> session.connection.send(frame)));
-                runOnUiThread(() -> updateStatus(
-                        "Connected peers: " + peers.sessions().size()
-                                + "\n" + safeName(session.device)
-                                + "\nRTT EWMA: " + format(session.metrics.ewmaMs()) + " ms"
-                                + "\np95: " + session.metrics.p95Ms() + " ms"));
-            }
-
-            @Override public void onFrame(DeviceSession session, Frame frame) {
-                runOnUiThread(() -> updateStatus(
-                        "Peers: " + peers.sessions().size()
-                                + "\nLast: " + safeName(session.device)
-                                + " -> " + frame.type
-                                + "\nRTT EWMA: " + format(session.metrics.ewmaMs()) + " ms"
-                                + "\np95: " + session.metrics.p95Ms() + " ms"));
-            }
-
-            @Override public void onDisconnected(DeviceSession session, Exception error) {
-                ReliableCommandClient old = commandClients.remove(session.address());
-                if (old != null) old.close();
-                runOnUiThread(() -> updateStatus(
-                        "Reconnecting: " + safeName(session.device)
-                                + "\nConnected peers: " + peers.sessions().size()));
-            }
-
-            @Override public void onConnectError(BluetoothDevice device, Exception error) {
-                runOnUiThread(() -> updateStatus(
-                        "Connect error: " + (device == null ? "unknown" : safeName(device))
-                                + "\n" + error.getMessage()));
-            }
-        });
     }
 
     private void buildUi() {
@@ -165,8 +200,8 @@ public final class MainActivity extends Activity {
         root.addView(inspect, new LinearLayout.LayoutParams(-1, -2));
 
         Button receiver = new Button(this);
-        receiver.setText("Start receiver service");
-        receiver.setOnClickListener(v -> startReceiver());
+        receiver.setText("Keep receiver service active");
+        receiver.setOnClickListener(v -> ensureConnectionService());
         root.addView(receiver, new LinearLayout.LayoutParams(-1, -2));
 
         Button connectAll = new Button(this);
@@ -193,9 +228,15 @@ public final class MainActivity extends Activity {
     }
 
     private boolean hasBluetoothPermission() {
-        return Build.VERSION.SDK_INT < 31 ||
-                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
-                        == PackageManager.PERMISSION_GRANTED;
+        return Build.VERSION.SDK_INT < 31
+                || checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                == PackageManager.PERMISSION_GRANTED;
+    }
+
+    private boolean hasLocalNetworkPermission() {
+        return Build.VERSION.SDK_INT < 37
+                || checkSelfPermission(Manifest.permission.ACCESS_LOCAL_NETWORK)
+                == PackageManager.PERMISSION_GRANTED;
     }
 
     private void inspectBluetooth() {
@@ -216,29 +257,22 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        initPeerManager();
-
         devices.clear();
-        devices.addAll(adapter.getBondedDevices());
+        try {
+            devices.addAll(adapter.getBondedDevices());
+        } catch (Exception error) {
+            status.setText("Could not read paired devices: " + safeError(error));
+            return;
+        }
 
-        StringBuilder out = new StringBuilder(
-                "Paired devices: " + devices.size() + "\n");
+        StringBuilder out = new StringBuilder("Paired devices: ")
+                .append(devices.size()).append("\n");
         for (int i = 0; i < devices.size(); i++) {
             out.append(i).append(": ")
                     .append(safeName(devices.get(i))).append("\n");
         }
         status.setText(out);
-    }
-
-    private void startReceiver() {
-        if (!hasBluetoothPermission()) {
-            status.setText("Bluetooth permission is required.");
-            return;
-        }
-        Intent intent = new Intent(this, ConnectionService.class);
-        if (Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
-        else startService(intent);
-        updateStatus("Receiver service started.");
+        if (!bound) ensureConnectionService();
     }
 
     private void connectAll() {
@@ -251,14 +285,17 @@ public final class MainActivity extends Activity {
             status.setText("No paired devices.");
             return;
         }
+        if (peers == null) {
+            status.setText("Connection service is still starting.");
+            return;
+        }
 
-        initPeerManager();
         try {
             peers.connectAll(devices);
             updateStatus("Connection attempts started for up to "
                     + MultiDeviceManager.MAX_CLASSIC_PEERS + " peers.");
         } catch (Exception e) {
-            status.setText("Could not start multi-device connection: " + e.getMessage());
+            status.setText("Could not start multi-device connection: " + safeError(e));
         }
     }
 
@@ -278,7 +315,7 @@ public final class MainActivity extends Activity {
                     new JSONObject().put("t0", now)));
             updateStatus("PING broadcast to " + peers.sessions().size() + " peers.");
         } catch (Exception e) {
-            status.setText("Broadcast failed: " + e.getMessage());
+            status.setText("Broadcast failed: " + safeError(e));
         }
     }
 
@@ -290,6 +327,10 @@ public final class MainActivity extends Activity {
 
         for (DeviceSession session : peers.sessions()) {
             ReliableCommandClient client = commandClients.get(session.address());
+            if (client == null) {
+                attachCommandClient(session);
+                client = commandClients.get(session.address());
+            }
             if (client == null) continue;
 
             client.execute(
@@ -300,7 +341,7 @@ public final class MainActivity extends Activity {
             ).whenComplete((frame, error) -> runOnUiThread(() -> {
                 if (error != null) {
                     updateStatus("Device info failed for " + safeName(session.device)
-                            + ": " + error.getMessage());
+                            + ": " + safeError(error));
                 } else {
                     updateStatus("Device info from " + safeName(session.device)
                             + ": " + frame.payload.toString());
@@ -337,11 +378,11 @@ public final class MainActivity extends Activity {
             File staged = stageUri(uri);
             sendStagedFile(staged);
         } catch (Exception error) {
-            status.setText("Could not stage file: " + error.getMessage());
+            status.setText("Could not stage file: " + safeError(error));
         }
     }
 
-    private java.io.File stageUri(Uri uri) throws Exception {
+    private File stageUri(Uri uri) throws Exception {
         String name = "upload-" + System.currentTimeMillis() + ".bin";
         Cursor cursor = getContentResolver().query(
                 uri, new String[] {"_display_name"}, null, null, null);
@@ -359,11 +400,10 @@ public final class MainActivity extends Activity {
             }
         }
 
-        java.io.File target = new java.io.File(getCacheDir(), name);
+        File target = new File(getCacheDir(), name);
         try (java.io.InputStream in = getContentResolver().openInputStream(uri);
              java.io.OutputStream out = new java.io.BufferedOutputStream(
-                     new java.io.FileOutputStream(target),
-                     1024 * 1024)) {
+                     new java.io.FileOutputStream(target), 1024 * 1024)) {
             if (in == null) throw new java.io.IOException("Cannot open selected file");
             byte[] buffer = new byte[1024 * 1024];
             int n;
@@ -372,7 +412,7 @@ public final class MainActivity extends Activity {
         return target;
     }
 
-    private void sendStagedFile(java.io.File file) {
+    private void sendStagedFile(File file) {
         int total = peers.sessions().size();
         int[] complete = {0};
 
@@ -383,7 +423,7 @@ public final class MainActivity extends Activity {
                 @Override public void onComplete(DeviceSession peer, long bytes) {
                     complete[0]++;
                     runOnUiThread(() -> updateStatus(
-                            "Transfer complete: " + peer.device.getName()
+                            "Transfer complete: " + safeName(peer.device)
                                     + " (" + bytes + " bytes), "
                                     + complete[0] + "/" + total));
                     if (complete[0] == total) file.delete();
@@ -392,8 +432,8 @@ public final class MainActivity extends Activity {
                 @Override public void onError(DeviceSession peer, Exception error) {
                     complete[0]++;
                     runOnUiThread(() -> updateStatus(
-                            "Transfer failed: " + safeName(peer.device)
-                                    + " - " + error.getMessage()
+                            "Transfer failed: " + safeName(peer == null ? null : peer.device)
+                                    + " - " + safeError(error)
                                     + " (" + complete[0] + "/" + total + ")"));
                     if (complete[0] == total) file.delete();
                 }
@@ -401,11 +441,28 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private void attachCommandClient(DeviceSession session) {
+        commandClients.computeIfAbsent(
+                session.address(),
+                ignored -> new ReliableCommandClient(
+                        frame -> session.connection.send(frame)));
+    }
+
+    private int peerCount() {
+        return peers == null ? 0 : peers.sessions().size();
+    }
+
+    private void closeCommandClients() {
+        for (ReliableCommandClient client : commandClients.values()) client.close();
+        commandClients.clear();
+    }
+
     private void updateStatus(String value) {
         if (status != null) status.setText(value);
     }
 
     private static String safeName(BluetoothDevice device) {
+        if (device == null) return "unknown";
         try {
             String name = device.getName();
             return name == null ? "unknown" : name;
@@ -414,14 +471,27 @@ public final class MainActivity extends Activity {
         }
     }
 
+    private static String safeError(Throwable error) {
+        if (error == null) return "unknown error";
+        String message = error.getMessage();
+        return message == null ? error.getClass().getSimpleName() : message;
+    }
+
     private static String format(double value) {
-        return Double.isNaN(value) ? "-" : String.format(java.util.Locale.US, "%.1f", value);
+        return Double.isNaN(value)
+                ? "-"
+                : String.format(java.util.Locale.US, "%.1f", value);
     }
 
     @Override protected void onDestroy() {
-        for (ReliableCommandClient client : commandClients.values()) client.close();
-        commandClients.clear();
-        if (peers != null) peers.close();
+        if (bound && peers != null) peers.removeListener(uiListener);
+        closeCommandClients();
+        if (bound) {
+            try { unbindService(serviceConnection); } catch (Exception ignored) {}
+            bound = false;
+        }
+        service = null;
+        peers = null;
         super.onDestroy();
     }
 }

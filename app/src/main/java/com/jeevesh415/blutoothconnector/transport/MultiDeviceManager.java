@@ -1,5 +1,6 @@
 package com.jeevesh415.blutoothconnector.transport;
 
+import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
@@ -9,15 +10,16 @@ import com.jeevesh415.blutoothconnector.protocol.Protocol;
 
 import org.json.JSONObject;
 
+import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
-import java.io.File;
 import java.util.concurrent.TimeUnit;
 
 public final class MultiDeviceManager implements AutoCloseable {
@@ -46,33 +48,45 @@ public final class MultiDeviceManager implements AutoCloseable {
             Executors.newScheduledThreadPool(2);
     private final java.util.concurrent.ExecutorService bulkExecutor =
             Executors.newCachedThreadPool();
-    private volatile Listener listener;
+    private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
     public MultiDeviceManager(BluetoothAdapter adapter, Listener listener) {
-        this.listener = listener;
+        if (listener != null) listeners.add(listener);
         this.transport = new BluetoothTransport(adapter, new BluetoothTransport.Listener() {
             @Override public void onConnected(BluetoothDevice device, BluetoothSocket socket,
                                               boolean incoming) {
-                attach(device, socket);
+                attach(device, socket, incoming);
             }
 
             @Override public void onError(BluetoothDevice device, Exception error) {
                 if (device != null) {
                     connecting.remove(device.getAddress());
                     retryLater(device);
-                    if (MultiDeviceManager.this.listener != null) {
-                        MultiDeviceManager.this.listener.onConnectError(device, error);
-                    }
                 }
+                notifyConnectError(device, error);
             }
         });
         scheduler.scheduleAtFixedRate(this::healthTick,
                 HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
     }
 
-    public void setListener(Listener listener) { this.listener = listener; }
-    public void startReceiver() throws Exception { transport.listen(); }
+    public void addListener(Listener listener) {
+        if (listener != null) listeners.addIfAbsent(listener);
+    }
+
+    public void removeListener(Listener listener) {
+        listeners.remove(listener);
+    }
+
+    public void setListener(Listener listener) {
+        listeners.clear();
+        if (listener != null) listeners.add(listener);
+    }
+
+    public void startReceiver() throws Exception {
+        transport.listen();
+    }
 
     public void connect(BluetoothDevice device) {
         if (closed || device == null) return;
@@ -93,7 +107,7 @@ public final class MultiDeviceManager implements AutoCloseable {
         int started = 0;
         for (BluetoothDevice device : devices) {
             if (started >= budget) break;
-            if (!sessions.containsKey(device.getAddress())) {
+            if (device != null && !sessions.containsKey(device.getAddress())) {
                 connect(device);
                 started++;
             }
@@ -104,13 +118,25 @@ public final class MultiDeviceManager implements AutoCloseable {
         return Collections.unmodifiableList(new ArrayList<>(sessions.values()));
     }
 
-    public DeviceSession session(String address) { return sessions.get(address); }
+    public DeviceSession session(String address) {
+        return sessions.get(address);
+    }
 
     public void transferFile(String address, File file, TransferListener listener) {
+        if (file == null || !file.isFile()) {
+            if (listener != null) {
+                listener.onError(sessions.get(address),
+                        new IllegalArgumentException("Not a readable file"));
+            }
+            return;
+        }
+
         DeviceSession session = sessions.get(address);
         if (session == null) {
-            if (listener != null) listener.onError(null,
-                    new IllegalStateException("Device not connected: " + address));
+            if (listener != null) {
+                listener.onError(null,
+                        new IllegalStateException("Device not connected: " + address));
+            }
             return;
         }
 
@@ -130,8 +156,9 @@ public final class MultiDeviceManager implements AutoCloseable {
 
     public void send(String address, Frame frame) throws Exception {
         DeviceSession session = sessions.get(address);
-        if (session == null) throw new IllegalStateException(
-                "Device not connected: " + address);
+        if (session == null) {
+            throw new IllegalStateException("Device not connected: " + address);
+        }
         session.connection.send(frame);
         session.lastTxMs = System.currentTimeMillis();
     }
@@ -153,10 +180,18 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
     }
 
-    private void attach(BluetoothDevice device, BluetoothSocket socket) {
+    @SuppressLint("MissingPermission")
+    private void attach(BluetoothDevice device, BluetoothSocket socket, boolean incoming) {
         final String address = device.getAddress();
         knownDevices.put(address, device);
         connecting.remove(address);
+
+        if (incoming && device.getBondState() != BluetoothDevice.BOND_BONDED) {
+            try { socket.close(); } catch (Exception ignored) {}
+            notifyConnectError(device,
+                    new SecurityException("Unpaired incoming Bluetooth device rejected"));
+            return;
+        }
 
         if (sessions.size() >= MAX_CLASSIC_PEERS && !sessions.containsKey(address)) {
             try { socket.close(); } catch (Exception ignored) {}
@@ -191,8 +226,12 @@ public final class MultiDeviceManager implements AutoCloseable {
                                     for (int i = 0; i < endpoints.length(); i++) {
                                         org.json.JSONObject item = endpoints.optJSONObject(i);
                                         if (item != null) {
-                                            current.bulkEndpoints.add(
-                                                    BulkEndpointInfo.fromJson(item));
+                                            try {
+                                                current.bulkEndpoints.add(
+                                                        BulkEndpointInfo.fromJson(item));
+                                            } catch (Exception ignored) {
+                                                // Ignore one malformed endpoint, not the session.
+                                            }
                                         }
                                     }
                                 }
@@ -202,11 +241,13 @@ public final class MultiDeviceManager implements AutoCloseable {
                                 long sent = frame.payload.optLong("t0", 0);
                                 if (sent == current.lastPingSentNs && sent != 0) {
                                     long rttMs = (System.nanoTime() - sent) / 1_000_000L;
-                                    current.metrics.observe(rttMs);
+                                    if (rttMs >= 0 && rttMs < 300_000) {
+                                        current.metrics.observe(rttMs);
+                                    }
                                 }
                             }
 
-                            if (listener != null) listener.onFrame(current, frame);
+                            notifyFrame(current, frame);
                         }
 
                         @Override public void onClosed(Exception error) {
@@ -214,7 +255,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                             transport.forgetSocket(address, socket);
                             if (current != null) {
                                 current.state = DeviceSession.State.RECONNECTING;
-                                if (listener != null) listener.onDisconnected(current, error);
+                                notifyDisconnected(current, error);
                                 retryLater(device);
                             }
                         }
@@ -234,13 +275,13 @@ public final class MultiDeviceManager implements AutoCloseable {
                     Protocol.VERSION, Protocol.HELLO,
                     session.nextSequence(), System.currentTimeMillis(), hello));
 
-            if (listener != null) listener.onConnected(session);
+            notifyConnected(session);
         } catch (Exception e) {
             try { socket.close(); } catch (Exception ignored) {}
             transport.forgetSocket(address, socket);
             connecting.remove(address);
             retryLater(device);
-            if (listener != null) listener.onConnectError(device, e);
+            notifyConnectError(device, e);
         }
     }
 
@@ -274,7 +315,7 @@ public final class MultiDeviceManager implements AutoCloseable {
             session.state = DeviceSession.State.RECONNECTING;
             try { session.connection.close(); } catch (Exception ignored) {}
             transport.forgetSocket(address, session.socket);
-            if (listener != null) listener.onDisconnected(session, error);
+            notifyDisconnected(session, error);
             retryLater(session.device);
         }
     }
@@ -283,13 +324,37 @@ public final class MultiDeviceManager implements AutoCloseable {
         if (closed || device == null) return;
         String address = device.getAddress();
         int attempt = retryAttempts.merge(address, 1, Integer::sum);
-        long delay = Math.min(30, 1L << Math.min(attempt - 1, 4));
+        long delay = Math.min(30L, 1L << Math.min(attempt - 1, 4));
         scheduler.schedule(() -> {
             if (!closed && !sessions.containsKey(address)
                     && connecting.putIfAbsent(address, Boolean.TRUE) == null) {
                 transport.connect(device);
             }
         }, delay, TimeUnit.SECONDS);
+    }
+
+    private void notifyConnected(DeviceSession session) {
+        for (Listener l : listeners) {
+            try { l.onConnected(session); } catch (Exception ignored) {}
+        }
+    }
+
+    private void notifyFrame(DeviceSession session, Frame frame) {
+        for (Listener l : listeners) {
+            try { l.onFrame(session, frame); } catch (Exception ignored) {}
+        }
+    }
+
+    private void notifyDisconnected(DeviceSession session, Exception error) {
+        for (Listener l : listeners) {
+            try { l.onDisconnected(session, error); } catch (Exception ignored) {}
+        }
+    }
+
+    private void notifyConnectError(BluetoothDevice device, Exception error) {
+        for (Listener l : listeners) {
+            try { l.onConnectError(device, error); } catch (Exception ignored) {}
+        }
     }
 
     private String safeName(BluetoothDevice device) {
@@ -301,7 +366,8 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
     }
 
-    @Override public void close() {
+    @Override
+    public void close() {
         closed = true;
         scheduler.shutdownNow();
         bulkExecutor.shutdownNow();
@@ -310,5 +376,6 @@ public final class MultiDeviceManager implements AutoCloseable {
         knownDevices.clear();
         retryAttempts.clear();
         connecting.clear();
+        listeners.clear();
     }
 }

@@ -64,6 +64,7 @@ public final class TcpBulkEndpoint implements AutoCloseable {
             while (server != null && !server.isClosed()) {
                 try {
                     final Socket socket = server.accept();
+                    socket.setTcpNoDelay(true);
                     executor.execute(() -> handle(socket));
                 } catch (Exception e) {
                     if (server != null && listener != null) listener.onError(e);
@@ -74,11 +75,12 @@ public final class TcpBulkEndpoint implements AutoCloseable {
 
     private void handle(Socket socket) {
         try (Socket s = socket) {
-            s.setReceiveBufferSize(1024 * 1024);
-            BufferedInputStream bufferedIn = new BufferedInputStream(s.getInputStream(), 1024 * 1024);
+            s.setReceiveBufferSize(4 * 1024 * 1024);
+            BufferedInputStream bufferedIn =
+                    new BufferedInputStream(s.getInputStream(), 1024 * 1024);
             DataInputStream in = new DataInputStream(bufferedIn);
             DataOutputStream out = new DataOutputStream(
-                    new BufferedOutputStream(s.getOutputStream(), 1024 * 1024));
+                    new BufferedOutputStream(s.getOutputStream(), 64 * 1024));
 
             bufferedIn.mark(4);
             int magic = in.readInt();
@@ -103,30 +105,61 @@ public final class TcpBulkEndpoint implements AutoCloseable {
     }
 
     public synchronized List<Endpoint> endpoints() {
-        if (server == null) return Collections.emptyList();
+        if (server == null || token == null) return Collections.emptyList();
+
         String encoded = BulkTransferProtocol.encodeToken(token);
         List<Endpoint> result = new ArrayList<>();
         try {
             Enumeration<NetworkInterface> all = NetworkInterface.getNetworkInterfaces();
             while (all.hasMoreElements()) {
                 NetworkInterface nif = all.nextElement();
-                if (!nif.isUp() || nif.isLoopback()) continue;
+                if (!nif.isUp() || nif.isLoopback() || nif.isVirtual()) continue;
+
+                String transport = classify(nif.getName());
                 Enumeration<InetAddress> addresses = nif.getInetAddresses();
                 while (addresses.hasMoreElements()) {
                     InetAddress addr = addresses.nextElement();
-                    if (addr instanceof Inet4Address && !addr.isLoopbackAddress()
-                            && !addr.isLinkLocalAddress()) {
-                        result.add(new Endpoint(
-                                addr.getHostAddress(), port(), encoded, nif.getName()));
+                    if (!(addr instanceof Inet4Address)
+                            || addr.isLoopbackAddress()
+                            || addr.isLinkLocalAddress()) {
+                        continue;
                     }
+
+                    String host = addr.getHostAddress();
+                    if (!isPrivateIpv4(host)) continue;
+                    result.add(new Endpoint(host, port(), encoded, transport));
                 }
             }
         } catch (Exception ignored) {}
         return result;
     }
 
-    @Override
-    public synchronized void close() {
+    private static String classify(String interfaceName) {
+        String n = interfaceName == null ? "" : interfaceName.toLowerCase(java.util.Locale.US);
+        if (n.startsWith("p2p")) return "wifi-direct";
+        if (n.startsWith("aware") || n.startsWith("nan")) return "wifi-aware";
+        if (n.startsWith("wlan")) return "wifi-lan";
+        if (n.startsWith("eth")) return "ethernet";
+        return "tcp-local";
+    }
+
+    private static boolean isPrivateIpv4(String host) {
+        String[] parts = host.split("\\.");
+        if (parts.length != 4) return false;
+        int a, b;
+        try {
+            a = Integer.parseInt(parts[0]);
+            b = Integer.parseInt(parts[1]);
+        } catch (NumberFormatException e) {
+            return false;
+        }
+        return a == 10
+                || (a == 172 && b >= 16 && b <= 31)
+                || (a == 192 && b == 168)
+                || (a == 100 && b >= 64 && b <= 127);
+    }
+
+    @Override public synchronized void close() {
         if (server != null) {
             try { server.close(); } catch (Exception ignored) {}
             server = null;

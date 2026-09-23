@@ -5,6 +5,8 @@ import android.app.NotificationChannel;
 import android.app.NotificationManager;
 import android.app.Service;
 import android.bluetooth.BluetoothAdapter;
+import android.bluetooth.BluetoothDevice;
+import android.os.Binder;
 import android.os.IBinder;
 import android.content.Intent;
 import android.content.pm.ServiceInfo;
@@ -27,10 +29,22 @@ public final class ConnectionService extends Service {
     private static final String CHANNEL = "connection";
     private static final int NOTIFICATION_ID = 7;
 
-    private MultiDeviceManager peers;
-    private TcpBulkEndpoint bulk;
+    private final IBinder binder = new LocalBinder();
     private final CapabilityRegistry registry = new CapabilityRegistry();
     private final CommandRouter router = new CommandRouter(registry);
+
+    private MultiDeviceManager peers;
+    private TcpBulkEndpoint bulk;
+
+    public final class LocalBinder extends Binder {
+        public ConnectionService service() {
+            return ConnectionService.this;
+        }
+    }
+
+    public MultiDeviceManager peers() {
+        return peers;
+    }
 
     @Override public void onCreate() {
         super.onCreate();
@@ -56,11 +70,11 @@ public final class ConnectionService extends Service {
                     new File(getFilesDir(), "transfers"),
                     new TcpBulkEndpoint.Listener() {
                         @Override public void onTransferComplete(File file) {
-                            // Future: publish an EVENT after transfer authorization is added.
+                            // Service currently has no UI-facing transfer bus.
                         }
 
                         @Override public void onError(Exception error) {
-                            // Future: structured diagnostic event.
+                            // The connection service keeps running; individual transfers fail closed.
                         }
                     });
         } catch (Exception ignored) {
@@ -77,16 +91,19 @@ public final class ConnectionService extends Service {
             }
 
             @Override public void onDisconnected(DeviceSession session, Exception error) {
-                // MultiDeviceManager handles exponential reconnect.
+                // MultiDeviceManager handles reconnect with bounded backoff.
             }
 
-            @Override public void onConnectError(android.bluetooth.BluetoothDevice device,
-                                                 Exception error) {
-                // Future: structured diagnostic event.
+            @Override public void onConnectError(BluetoothDevice device, Exception error) {
+                // Individual connection failure is isolated to that peer.
             }
         });
 
-        try { peers.startReceiver(); } catch (Exception ignored) {}
+        try {
+            peers.startReceiver();
+        } catch (Exception ignored) {
+            // Outgoing connections can still operate if the server socket cannot start.
+        }
     }
 
     private void handleFrame(DeviceSession session, Frame frame) {
@@ -143,7 +160,8 @@ public final class ConnectionService extends Service {
                     endpoints.put(new JSONObject()
                             .put("host", endpoint.host)
                             .put("port", endpoint.port)
-                            .put("token", endpoint.tokenBase64)\n                            .put("transport", endpoint.transport));
+                            .put("token", endpoint.tokenBase64)
+                            .put("transport", endpoint.transport));
                 }
             }
             payload.put("bulkEndpoints", endpoints);
@@ -185,6 +203,6 @@ public final class ConnectionService extends Service {
     }
 
     @Override public IBinder onBind(Intent intent) {
-        return null;
+        return binder;
     }
 }

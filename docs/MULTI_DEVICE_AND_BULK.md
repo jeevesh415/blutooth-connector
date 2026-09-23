@@ -15,28 +15,26 @@ Each session owns its own:
 - RTT estimator
 - negotiated bulk endpoints
 
-One failing peer is therefore isolated from the other sessions.
+The foreground ConnectionService owns the MultiDeviceManager so the Activity is no longer the owner of the live transport graph. Closing or recreating the UI therefore does not intentionally tear down every peer connection.
 
 ## Reliability stack
 
-The system deliberately uses several layers:
-
 Physical/link layer:
-Bluetooth's lower layers already use acknowledgements/retransmission for ACL data integrity. The application does not try to replace those mechanisms.
+Bluetooth's lower layers already provide link reliability.
 
 Session layer:
-Every peer has a heartbeat every 5 seconds. A peer that produces no received traffic for 15 seconds is treated as unhealthy. Reconnect uses exponential backoff:
+Every peer has a heartbeat every 5 seconds. A peer that produces no received traffic for 15 seconds is treated as unhealthy. Reconnect uses bounded exponential backoff:
 
 1, 2, 4, 8, 16, 30, 30, ... seconds
 
-Control-plane sequencing and idempotent command identifiers are reserved for the next protocol milestone.
+Application sequencing and idempotent command identifiers remain per ordered RFCOMM session.
 
 Bulk-data layer:
-Bulk transfer uses TCP where a mutually reachable local IP endpoint is advertised. TCP supplies ordered reliable delivery; the application adds a random 256-bit transfer token, file-size metadata, resume offset, and final SHA-256 verification.
+Bulk transfer uses TCP where a mutually reachable private IPv4 endpoint is advertised. TCP supplies ordered reliable delivery; the application adds a random 256-bit endpoint token and final SHA-256 verification.
 
 ## Why Bluetooth is not the bulk path
 
-BR/EDR bandwidth is shared at the physical-link level. Making several applications push large streams simultaneously over Bluetooth therefore competes for the same radio resources. The Bluetooth SIG describes BR/EDR as a 1-3 Mb/s class technology and a seven-device piconet topology.
+BR/EDR bandwidth is shared at the physical-link level. Making several applications push large streams simultaneously over Bluetooth therefore competes for the same radio resources.
 
 For large data, the preferred path is:
 
@@ -44,32 +42,41 @@ Bluetooth control
     |
     +---- capability exchange ----+
                                   |
-                           local IP endpoint
+                         local TCP path(s)
                                   |
-                           TCP bulk stream
+                           striped chunks
 
-The controller can keep the Bluetooth session alive while the file transfer uses the higher-bandwidth local path.
+Each chunk is acknowledged independently, so a failed path can be retried without retransmitting successful chunks. The receiver writes completed chunks at explicit file offsets and only finalizes the object after whole-file SHA-256 verification.
 
-Android documents Wi-Fi Direct as a direct peer-to-peer transport, including multi-device groups, and describes it as suitable for higher-throughput communication than Bluetooth. The project therefore keeps the bulk protocol transport-neutral so a Wi-Fi Direct bootstrap can be added without changing the transfer protocol.
+## Path independence
+
+The endpoint list is derived from active, non-virtual interfaces and private IPv4 addresses. Interface names are classified as:
+
+- wifi-lan
+- wifi-direct
+- wifi-aware
+- ethernet
+- tcp-local
+
+The scheduler treats these as candidate path identities, but an interface label is not proof of an independent physical link. Two addresses can still traverse the same Wi-Fi radio, AP, chipset queue, or RF channel.
+
+True aggregate throughput requires genuinely independent usable paths. The code therefore avoids claiming “zero lag” or guaranteed bandwidth multiplication.
 
 ## Failure semantics
 
-There is no physically meaningful guarantee of zero wireless failures. Instead we target recoverability.
-
 If Bluetooth drops:
 - the affected session is closed;
-- the peer remains in the roster;
-- the reconnect scheduler retries with bounded exponential backoff;
-- other peer sessions continue.
+- the peer remains in the retry roster;
+- reconnect uses bounded exponential backoff;
+- other peers continue independently.
 
-If TCP drops during a file transfer:
-- the partial file remains;
-- a later attempt sends the same transfer identity;
-- the receiver reports the current partial length;
-- the sender resumes from that offset;
-- the complete object is accepted only after SHA-256 verification.
+If one TCP path drops during a file transfer:
+- that chunk is retried;
+- successful chunks remain valid;
+- other paths continue;
+- finalization still requires complete SHA-256 verification.
 
-If the integrity check fails, the partial file is discarded and the transfer restarts cleanly.
+If integrity verification fails, the partial object is not promoted to the final filename.
 
 ## Performance quantities
 
@@ -89,22 +96,14 @@ Latency estimator:
 
 S_i = alpha * RTT_i + (1-alpha) * S_(i-1)
 
-Variance tracker:
+The implementation exposes EWMA, standard deviation and p95 over a rolling sample window so thresholds can be tuned from measurements.
 
-V_i = beta * (RTT_i - S_(i-1))^2 + (1-beta) * V_(i-1)
+## Next validation milestone
 
-Adaptive timeout candidate:
+The repository now has unit tests for framing, path allocation, and bulk-request encoding. The next runtime benchmark on two or more real Android devices should compare:
 
-T_i = clamp(T_min, S_i + k * sqrt(V_i), T_max)
+1. Bluetooth control + single local TCP path.
+2. Bluetooth control + concurrent local TCP endpoints when they are actually independent.
+3. Bluetooth-only control under load.
 
-The implementation exposes EWMA, standard deviation and p95 over a rolling sample window so thresholds can be tuned from measurements rather than intuition.
-
-## Next performance milestone
-
-The protocol is now ready for a real transfer benchmark harness. That benchmark should compare:
-
-1. Bluetooth-only bulk transfer.
-2. Bluetooth control + local TCP bulk.
-3. Bluetooth control + Wi-Fi Direct TCP bulk when available.
-
-Measure median, p95, p99, sustained Mbps, reconnect time, transfer completion rate, and energy/MB.
+Measure median/p95/p99 command latency, sustained Mbps, chunk retry rate, reconnect time, path utilization, and energy/MB.
