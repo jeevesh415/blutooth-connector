@@ -143,7 +143,7 @@ public final class ConnectionService extends Service {
                     endpoints.put(new JSONObject()
                             .put("host", endpoint.host)
                             .put("port", endpoint.port)
-                            .put("token", endpoint.tokenBase64));
+                            .put("token", endpoint.tokenBase64)\n                            .put("transport", endpoint.transport));
                 }
             }
             payload.put("bulkEndpoints", endpoints);
