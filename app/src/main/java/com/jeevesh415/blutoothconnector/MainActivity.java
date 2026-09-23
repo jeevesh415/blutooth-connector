@@ -18,8 +18,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH = 100;
     private TextView status;
 
-    @Override
-    protected void onCreate(Bundle state) {
+    @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
         buildUi();
         requestBluetoothPermissions();
@@ -38,15 +37,20 @@ public final class MainActivity extends Activity {
         root.addView(title, new LinearLayout.LayoutParams(-1, -2));
 
         status = new TextView(this);
-        status.setText("Checking Bluetooth...");
+        status.setText("Bluetooth control substrate");
         status.setTextSize(16);
         status.setPadding(0, 32, 0, 32);
         root.addView(status, new LinearLayout.LayoutParams(-1, -2));
 
-        Button refresh = new Button(this);
-        refresh.setText("Inspect Bluetooth");
-        refresh.setOnClickListener(v -> inspectBluetooth());
-        root.addView(refresh, new LinearLayout.LayoutParams(-1, -2));
+        Button inspect = new Button(this);
+        inspect.setText("Inspect paired devices");
+        inspect.setOnClickListener(v -> inspectBluetooth());
+        root.addView(inspect, new LinearLayout.LayoutParams(-1, -2));
+
+        Button listen = new Button(this);
+        listen.setText("Start receiver");
+        listen.setOnClickListener(v -> startReceiver());
+        root.addView(listen, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -54,49 +58,54 @@ public final class MainActivity extends Activity {
     private void requestBluetoothPermissions() {
         if (Build.VERSION.SDK_INT >= 31) {
             requestPermissions(new String[] {
-                Manifest.permission.BLUETOOTH_SCAN,
-                Manifest.permission.BLUETOOTH_CONNECT,
-                Manifest.permission.BLUETOOTH_ADVERTISE
+                    Manifest.permission.BLUETOOTH_SCAN,
+                    Manifest.permission.BLUETOOTH_CONNECT,
+                    Manifest.permission.BLUETOOTH_ADVERTISE
             }, REQUEST_BLUETOOTH);
-        } else {
-            inspectBluetooth();
-        }
+        } else inspectBluetooth();
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] results) {
-        super.onRequestPermissionsResult(requestCode, permissions, results);
-        if (requestCode == REQUEST_BLUETOOTH) inspectBluetooth();
+    private boolean hasConnectPermission() {
+        return Build.VERSION.SDK_INT < 31 ||
+                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
+                        == PackageManager.PERMISSION_GRANTED;
     }
 
     private void inspectBluetooth() {
-        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
-        if (adapter == null) {
-            status.setText("Bluetooth is not available on this phone.");
+        if (!hasConnectPermission()) {
+            status.setText("Bluetooth permission is required.");
             return;
         }
-
+        BluetoothAdapter adapter = BluetoothAdapter.getDefaultAdapter();
+        if (adapter == null) {
+            status.setText("Bluetooth is unavailable.");
+            return;
+        }
         if (!adapter.isEnabled()) {
-            status.setText("Bluetooth is disabled. Enable it, then inspect again.");
+            status.setText("Bluetooth is disabled. Enable it and try again.");
             startActivity(new Intent(BluetoothAdapter.ACTION_REQUEST_ENABLE));
             return;
         }
-
         StringBuilder out = new StringBuilder("Bluetooth ready.\n\nPaired devices:\n");
-        if (Build.VERSION.SDK_INT >= 31 &&
-                checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT) != PackageManager.PERMISSION_GRANTED) {
-            out.append("Permission required.");
-        } else {
-            Set<BluetoothDevice> devices = adapter.getBondedDevices();
-            if (devices.isEmpty()) {
-                out.append("None");
-            } else {
-                for (BluetoothDevice device : devices) {
-                    out.append("• ").append(device.getName())
-                       .append("\n  ").append(device.getAddress()).append("\n");
-                }
-            }
+        Set<BluetoothDevice> devices = adapter.getBondedDevices();
+        if (devices.isEmpty()) out.append("None");
+        else for (BluetoothDevice d : devices) {
+            out.append("• ").append(d.getName()).append("\n")
+               .append("  ").append(d.getAddress()).append("\n");
         }
         status.setText(out);
+    }
+
+    private void startReceiver() {
+        if (!hasConnectPermission()) {
+            status.setText("Bluetooth permission is required.");
+            return;
+        }
+        if (Build.VERSION.SDK_INT >= 26) {
+            startForegroundService(new Intent(this, ConnectionService.class));
+        } else {
+            startService(new Intent(this, ConnectionService.class));
+        }
+        status.setText("Receiver service started. Keep this device paired and ready.");
     }
 }
