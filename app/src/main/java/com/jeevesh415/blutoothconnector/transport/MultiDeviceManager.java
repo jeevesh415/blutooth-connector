@@ -4,6 +4,7 @@ import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
+import android.content.Context;
 
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
@@ -40,6 +41,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     }
 
     private final BluetoothTransport transport;
+    private final Context bulkContext;
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, BluetoothDevice> knownDevices = new ConcurrentHashMap<>();
     private final Map<String, Integer> retryAttempts = new ConcurrentHashMap<>();
@@ -48,11 +50,19 @@ public final class MultiDeviceManager implements AutoCloseable {
             Executors.newScheduledThreadPool(2);
     private final java.util.concurrent.ExecutorService bulkExecutor =
             Executors.newCachedThreadPool();
-    private final CopyOnWriteArrayList<Listener> listeners = new CopyOnWriteArrayList<>();
+    private final CopyOnWriteArrayList<Listener> listeners =
+            new CopyOnWriteArrayList<>();
     private volatile boolean closed;
 
     public MultiDeviceManager(BluetoothAdapter adapter, Listener listener) {
+        this(null, adapter, listener);
+    }
+
+    public MultiDeviceManager(Context context, BluetoothAdapter adapter, Listener listener) {
+        if (adapter == null) throw new IllegalArgumentException("Bluetooth adapter");
         if (listener != null) listeners.add(listener);
+        this.bulkContext = context == null ? null : context.getApplicationContext();
+
         this.transport = new BluetoothTransport(adapter, new BluetoothTransport.Listener() {
             @Override public void onConnected(BluetoothDevice device, BluetoothSocket socket,
                                               boolean incoming) {
@@ -67,8 +77,9 @@ public final class MultiDeviceManager implements AutoCloseable {
                 notifyConnectError(device, error);
             }
         });
-        scheduler.scheduleAtFixedRate(this::healthTick,
-                HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
+
+        scheduler.scheduleAtFixedRate(
+                this::healthTick, HEARTBEAT_MS, HEARTBEAT_MS, TimeUnit.MILLISECONDS);
     }
 
     public void addListener(Listener listener) {
@@ -90,11 +101,12 @@ public final class MultiDeviceManager implements AutoCloseable {
 
     public void connect(BluetoothDevice device) {
         if (closed || device == null) return;
-        if (sessions.size() >= MAX_CLASSIC_PEERS &&
-                !sessions.containsKey(device.getAddress())) {
+        if (sessions.size() >= MAX_CLASSIC_PEERS
+                && !sessions.containsKey(device.getAddress())) {
             throw new IllegalStateException(
                     "Application peer limit reached: " + MAX_CLASSIC_PEERS);
         }
+
         String address = device.getAddress();
         knownDevices.put(address, device);
         if (connecting.putIfAbsent(address, Boolean.TRUE) == null) {
@@ -105,6 +117,8 @@ public final class MultiDeviceManager implements AutoCloseable {
     public void connectAll(Collection<BluetoothDevice> devices) {
         int budget = MAX_CLASSIC_PEERS - sessions.size();
         int started = 0;
+        if (devices == null) return;
+
         for (BluetoothDevice device : devices) {
             if (started >= budget) break;
             if (device != null && !sessions.containsKey(device.getAddress())) {
@@ -142,11 +156,14 @@ public final class MultiDeviceManager implements AutoCloseable {
 
         bulkExecutor.execute(() -> {
             try {
-                List<BulkEndpointInfo> endpoints = new ArrayList<>(session.bulkEndpoints);
+                List<BulkEndpointInfo> endpoints =
+                        new ArrayList<>(session.bulkEndpoints);
                 if (endpoints.isEmpty()) {
                     throw new IllegalStateException("No bulk endpoint advertised");
                 }
-                long bytes = MultipathFileTransfer.send(file, endpoints, 4);
+
+                long bytes = MultipathFileTransfer.send(
+                        bulkContext, file, endpoints, 4);
                 if (listener != null) listener.onComplete(session, bytes);
             } catch (Exception error) {
                 if (listener != null) listener.onError(session, error);
@@ -188,12 +205,14 @@ public final class MultiDeviceManager implements AutoCloseable {
 
         if (incoming && device.getBondState() != BluetoothDevice.BOND_BONDED) {
             try { socket.close(); } catch (Exception ignored) {}
-            notifyConnectError(device,
+            notifyConnectError(
+                    device,
                     new SecurityException("Unpaired incoming Bluetooth device rejected"));
             return;
         }
 
-        if (sessions.size() >= MAX_CLASSIC_PEERS && !sessions.containsKey(address)) {
+        if (sessions.size() >= MAX_CLASSIC_PEERS
+                && !sessions.containsKey(address)) {
             try { socket.close(); } catch (Exception ignored) {}
             retryLater(device);
             return;
@@ -207,11 +226,13 @@ public final class MultiDeviceManager implements AutoCloseable {
         try {
             final FramedConnection[] holder = new FramedConnection[1];
             holder[0] = new FramedConnection(
-                    socket.getInputStream(), socket.getOutputStream(),
+                    socket.getInputStream(),
+                    socket.getOutputStream(),
                     new FramedConnection.Listener() {
                         @Override public void onFrame(Frame frame) {
                             DeviceSession current = sessions.get(address);
                             if (current == null) return;
+
                             if (frame.sequence < current.lastRxSequence) return;
                             if (frame.sequence > current.lastRxSequence) {
                                 current.lastRxSequence = frame.sequence;
@@ -224,14 +245,14 @@ public final class MultiDeviceManager implements AutoCloseable {
                                         frame.payload.optJSONArray("bulkEndpoints");
                                 if (endpoints != null) {
                                     for (int i = 0; i < endpoints.length(); i++) {
-                                        org.json.JSONObject item = endpoints.optJSONObject(i);
-                                        if (item != null) {
-                                            try {
-                                                current.bulkEndpoints.add(
-                                                        BulkEndpointInfo.fromJson(item));
-                                            } catch (Exception ignored) {
-                                                // Ignore one malformed endpoint, not the session.
-                                            }
+                                        org.json.JSONObject item =
+                                                endpoints.optJSONObject(i);
+                                        if (item == null) continue;
+                                        try {
+                                            current.bulkEndpoints.add(
+                                                    BulkEndpointInfo.fromJson(item));
+                                        } catch (Exception ignored) {
+                                            // Ignore one malformed endpoint.
                                         }
                                     }
                                 }
@@ -240,7 +261,8 @@ public final class MultiDeviceManager implements AutoCloseable {
                             if (Protocol.PONG.equals(frame.type)) {
                                 long sent = frame.payload.optLong("t0", 0);
                                 if (sent == current.lastPingSentNs && sent != 0) {
-                                    long rttMs = (System.nanoTime() - sent) / 1_000_000L;
+                                    long rttMs =
+                                            (System.nanoTime() - sent) / 1_000_000L;
                                     if (rttMs >= 0 && rttMs < 300_000) {
                                         current.metrics.observe(rttMs);
                                     }
@@ -261,7 +283,8 @@ public final class MultiDeviceManager implements AutoCloseable {
                         }
                     });
 
-            DeviceSession session = new DeviceSession(device, socket, holder[0]);
+            DeviceSession session =
+                    new DeviceSession(device, socket, holder[0]);
             sessions.put(address, session);
             retryAttempts.remove(address);
             holder[0].startReader();
@@ -272,8 +295,11 @@ public final class MultiDeviceManager implements AutoCloseable {
                     .put("device", safeName(device));
 
             holder[0].send(new Frame(
-                    Protocol.VERSION, Protocol.HELLO,
-                    session.nextSequence(), System.currentTimeMillis(), hello));
+                    Protocol.VERSION,
+                    Protocol.HELLO,
+                    session.nextSequence(),
+                    System.currentTimeMillis(),
+                    hello));
 
             notifyConnected(session);
         } catch (Exception e) {
@@ -291,7 +317,9 @@ public final class MultiDeviceManager implements AutoCloseable {
 
         for (DeviceSession session : sessions.values()) {
             if (now - session.lastRxMs > DEAD_AFTER_MS) {
-                closeSession(session, new java.io.IOException("Peer heartbeat timeout"));
+                closeSession(
+                        session,
+                        new java.io.IOException("Peer heartbeat timeout"));
                 continue;
             }
 
@@ -299,8 +327,10 @@ public final class MultiDeviceManager implements AutoCloseable {
                 long t0 = System.nanoTime();
                 session.lastPingSentNs = t0;
                 session.connection.send(new Frame(
-                        Protocol.VERSION, Protocol.PING,
-                        session.nextSequence(), now,
+                        Protocol.VERSION,
+                        Protocol.PING,
+                        session.nextSequence(),
+                        now,
                         new JSONObject().put("t0", t0)));
                 session.lastTxMs = now;
             } catch (Exception e) {
@@ -325,8 +355,10 @@ public final class MultiDeviceManager implements AutoCloseable {
         String address = device.getAddress();
         int attempt = retryAttempts.merge(address, 1, Integer::sum);
         long delay = Math.min(30L, 1L << Math.min(attempt - 1, 4));
+
         scheduler.schedule(() -> {
-            if (!closed && !sessions.containsKey(address)
+            if (!closed
+                    && !sessions.containsKey(address)
                     && connecting.putIfAbsent(address, Boolean.TRUE) == null) {
                 transport.connect(device);
             }

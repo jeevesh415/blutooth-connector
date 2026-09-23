@@ -69,19 +69,15 @@ public final class ConnectionService extends Service {
             bulk.start(
                     new File(getFilesDir(), "transfers"),
                     new TcpBulkEndpoint.Listener() {
-                        @Override public void onTransferComplete(File file) {
-                            // Service currently has no UI-facing transfer bus.
-                        }
+                        @Override public void onTransferComplete(File file) {}
 
-                        @Override public void onError(Exception error) {
-                            // The connection service keeps running; individual transfers fail closed.
-                        }
+                        @Override public void onError(Exception error) {}
                     });
-        } catch (Exception ignored) {
+        } catch (Exception error) {
             bulk = null;
         }
 
-        peers = new MultiDeviceManager(adapter, new MultiDeviceManager.Listener() {
+        peers = new MultiDeviceManager(this, adapter, new MultiDeviceManager.Listener() {
             @Override public void onConnected(DeviceSession session) {
                 sendCapabilities(session);
             }
@@ -90,19 +86,15 @@ public final class ConnectionService extends Service {
                 handleFrame(session, frame);
             }
 
-            @Override public void onDisconnected(DeviceSession session, Exception error) {
-                // MultiDeviceManager handles reconnect with bounded backoff.
-            }
+            @Override public void onDisconnected(DeviceSession session, Exception error) {}
 
-            @Override public void onConnectError(BluetoothDevice device, Exception error) {
-                // Individual connection failure is isolated to that peer.
-            }
+            @Override public void onConnectError(BluetoothDevice device, Exception error) {}
         });
 
         try {
             peers.startReceiver();
         } catch (Exception ignored) {
-            // Outgoing connections can still operate if the server socket cannot start.
+            // Outgoing connections remain available if the server socket cannot start.
         }
     }
 
@@ -111,14 +103,13 @@ public final class ConnectionService extends Service {
             if (Protocol.HELLO.equals(frame.type)) {
                 sendCapabilities(session);
             } else if (Protocol.PING.equals(frame.type)) {
-                JSONObject payload = new JSONObject()
-                        .put("t0", frame.payload.optLong("t0", 0));
                 session.connection.send(new Frame(
                         Protocol.VERSION,
                         Protocol.PONG,
                         session.nextSequence(),
                         System.currentTimeMillis(),
-                        payload));
+                        new JSONObject().put(
+                                "t0", frame.payload.optLong("t0", 0))));
             } else if (Protocol.COMMAND.equals(frame.type)) {
                 Frame result = router.route(frame);
                 session.connection.send(result);
@@ -131,7 +122,8 @@ public final class ConnectionService extends Service {
                         frame.sequence,
                         System.currentTimeMillis(),
                         new JSONObject()
-                                .put("requestId", frame.payload.optString("requestId", ""))
+                                .put("requestId",
+                                        frame.payload.optString("requestId", ""))
                                 .put("status", "error")
                                 .put("code", "ROUTER_ERROR")
                                 .put("message", error.getMessage() == null
