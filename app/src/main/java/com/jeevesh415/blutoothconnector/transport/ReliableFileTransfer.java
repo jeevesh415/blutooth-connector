@@ -85,7 +85,7 @@ public final class ReliableFileTransfer {
         BulkTransferProtocol.Request request = BulkTransferProtocol.readRequest(in);
         if (!MessageDigest.isEqual(expectedToken, request.token)) {
             BulkTransferProtocol.writeResponse(out, BulkTransferProtocol.STATUS_REJECTED, 0);
-            throw new java.io.SecurityException("Invalid bulk token");
+            throw new SecurityException("Invalid bulk token");
         }
 
         String safeName = request.fileName.replaceAll("[^a-zA-Z0-9._-]", "_");
