@@ -1,7 +1,7 @@
 package com.jeevesh415.blutoothconnector.media;
 
 import android.content.Context;
-import android.media.projection.MediaProjection;
+import android.content.Intent;
 import android.view.Surface;
 
 import org.webrtc.AudioSource;
@@ -197,12 +197,12 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
      * Capture the Android display through the user-authorized MediaProjection token.
      * Hardware encoding is selected by WebRTC's encoder factory when available.
      */
-    public synchronized void startScreen(MediaProjection projection,
+    public synchronized void startScreen(Intent projectionData,
                                           int width,
                                           int height,
                                           int fps) {
         if (screenCapturer != null) return;
-        if (projection == null) throw new IllegalArgumentException("projection");
+        if (projectionData == null) throw new IllegalArgumentException("projectionData");
 
         videoSource = factory.createVideoSource(false);
         surfaceTextureHelper = SurfaceTextureHelper.create(
@@ -210,8 +210,8 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
                 eglBase.getEglBaseContext());
 
         screenCapturer = new org.webrtc.ScreenCapturerAndroid(
-                projection,
-                new org.webrtc.MediaProjection.Callback() {
+                projectionData,
+                new android.media.projection.MediaProjection.Callback() {
                     @Override public void onStop() {
                         listener.onState("mediaProjection:stopped");
                     }
