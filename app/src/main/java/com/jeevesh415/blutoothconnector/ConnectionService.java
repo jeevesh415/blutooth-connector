@@ -24,6 +24,9 @@ import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public final class ConnectionService extends Service {
     private static final String CHANNEL = "connection";
@@ -35,6 +38,8 @@ public final class ConnectionService extends Service {
 
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
+    private final ScheduledExecutorService capabilityRefresh =
+            Executors.newSingleThreadScheduledExecutor();
 
     public final class LocalBinder extends Binder {
         public ConnectionService service() {
@@ -189,6 +194,7 @@ public final class ConnectionService extends Service {
     }
 
     @Override public void onDestroy() {
+        capabilityRefresh.shutdownNow();
         if (peers != null) peers.close();
         if (bulk != null) bulk.close();
         super.onDestroy();
