@@ -107,15 +107,27 @@ public final class MultipathReceiver {
         int chunkIndex = in.readInt();
         int chunkCount = in.readInt();
 
+        long expectedChunkCount =
+                (fileSize - 1) / MAX_CHUNK + 1;
+        long expectedOffset =
+                (long) chunkIndex * MAX_CHUNK;
         if (fileSize <= 0
+                || expectedChunkCount > MAX_CHUNKS
+                || chunkCount != expectedChunkCount
                 || offset < 0
                 || length <= 0
                 || length > MAX_CHUNK
-                || offset > fileSize - length
                 || chunkIndex < 0
-                || chunkCount <= chunkIndex
-                || chunkCount > MAX_CHUNKS) {
+                || chunkIndex >= chunkCount
+                || offset != expectedOffset
+                || offset > fileSize - length) {
             throw new java.io.IOException("Invalid chunk range");
+        }
+
+        long expectedLength =
+                Math.min((long) MAX_CHUNK, fileSize - offset);
+        if (length != expectedLength) {
+            throw new java.io.IOException("Invalid chunk length");
         }
 
         byte[] hash = new byte[MultipathCrypto.HASH_BYTES];
