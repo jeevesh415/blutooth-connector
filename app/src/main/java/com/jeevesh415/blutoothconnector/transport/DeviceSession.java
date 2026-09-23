@@ -3,6 +3,9 @@ package com.jeevesh415.blutoothconnector.transport;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
 
+import java.util.List;
+import java.util.concurrent.CopyOnWriteArrayList;
+
 public final class DeviceSession {
     public enum State {
         CONNECTING, CONNECTED, RECONNECTING, CLOSED
@@ -12,6 +15,8 @@ public final class DeviceSession {
     public final BluetoothSocket socket;
     public final FramedConnection connection;
     public final ConnectionMetrics metrics = new ConnectionMetrics();
+    public final List<BulkEndpointInfo> bulkEndpoints = new CopyOnWriteArrayList<>();
+
     public volatile State state = State.CONNECTED;
     public volatile long connectedAtMs;
     public volatile long lastRxMs;
@@ -29,7 +34,5 @@ public final class DeviceSession {
         this.lastTxMs = this.connectedAtMs;
     }
 
-    public String address() {
-        return device.getAddress();
-    }
+    public String address() { return device.getAddress(); }
 }
