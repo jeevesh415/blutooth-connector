@@ -298,6 +298,12 @@ public final class MainActivity extends Activity {
         connectWifiPeer.setOnClickListener(v -> connectFirstWifiDirectPeer());
         root.addView(connectWifiPeer, new LinearLayout.LayoutParams(-1, -2));
 
+        Button webDashboard = new Button(this);
+        webDashboard.setText("Open web dashboard");
+        webDashboard.setOnClickListener(v ->
+                startActivity(new Intent(this, WebDashboardActivity.class)));
+        root.addView(webDashboard, new LinearLayout.LayoutParams(-1, -2));
+
         setContentView(root);
     }
 
