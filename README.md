@@ -37,9 +37,9 @@ The application must never assume unrestricted Android control. Each capability 
 
 Every device relationship should be explicitly paired and revocable. Commands should be authenticated, sessions encrypted, and capabilities authorized independently. The receiver must reject unsupported or unauthorized operations.
 
-## Current milestone - 0.1
+## Current milestone - 0.3
 
-The repository contains the Android project skeleton, modern Bluetooth permissions, Bluetooth availability detection, and paired-device inspection. The next implementation milestone is the actual authenticated bidirectional transport and protocol.
+The repository now contains the bidirectional Bluetooth control plane, capability routing, adaptive command retries, foreground service ownership, encrypted BCL3 multipath bulk transfer, Android Network-specific path binding, and automated JVM/loopback verification.
 
 ## Build
 
@@ -95,7 +95,7 @@ On Phone A:
 4. Watch per-device RTT and p95 metrics.
 5. The receiver advertises local TCP bulk endpoints through the Bluetooth capability exchange.
 
-The next implementation layer is a real file-picker workflow on the controller and an explicit transfer UI that selects the fastest mutually available path per device.
+The current controller includes a file-picker workflow and sends staged files to all connected peers. Runtime device benchmarks are still required to measure the actual benefit of independent Wi-Fi paths.
 
 
 ## Adaptive multipath data plane
