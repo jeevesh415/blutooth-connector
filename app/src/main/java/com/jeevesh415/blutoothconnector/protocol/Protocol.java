@@ -25,6 +25,13 @@ public final class Protocol {
     public static final String EVENT = "EVENT";
     public static final String ERROR = "ERROR";
 
+    // Real-time media signaling carried over the authenticated control plane.
+    public static final String RTC_OFFER = "RTC_OFFER";
+    public static final String RTC_ANSWER = "RTC_ANSWER";
+    public static final String RTC_ICE = "RTC_ICE";
+    public static final String RTC_CONTROL = "RTC_CONTROL";
+    public static final String RTC_STOP = "RTC_STOP";
+
     public static String id(long sequence) {
         return String.format(Locale.US, "%08x", sequence);
     }
