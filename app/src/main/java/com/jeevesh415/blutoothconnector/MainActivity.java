@@ -427,21 +427,21 @@ public final class MainActivity extends Activity {
         for (DeviceSession session : peers.sessions()) {
             peers.transferFile(session.address(), file, new MultiDeviceManager.TransferListener() {
                 @Override public void onComplete(DeviceSession peer, long bytes) {
-                    complete[0]++;
+                    complete.incrementAndGet();
                     runOnUiThread(() -> updateStatus(
                             "Transfer complete: " + safeName(peer.device)
                                     + " (" + bytes + " bytes), "
-                                    + complete[0] + "/" + total));
-                    if (complete[0] == total) file.delete();
+                                    + complete.get() + "/" + total));
+                    if (complete.get() == total) file.delete();
                 }
 
                 @Override public void onError(DeviceSession peer, Exception error) {
-                    complete[0]++;
+                    complete.incrementAndGet();
                     runOnUiThread(() -> updateStatus(
                             "Transfer failed: " + safeName(peer == null ? null : peer.device)
                                     + " - " + safeError(error)
-                                    + " (" + complete[0] + "/" + total + ")"));
-                    if (complete[0] == total) file.delete();
+                                    + " (" + complete.get() + "/" + total + ")"));
+                    if (complete.get() == total) file.delete();
                 }
             });
         }
