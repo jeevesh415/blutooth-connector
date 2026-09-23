@@ -20,6 +20,8 @@ import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CompletionService;
+import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
@@ -48,20 +50,13 @@ public final class MultipathFileTransfer {
         }
     }
 
-    private MultipathFileTransfer() {}
-
-    public static long send(
-            File file,
-            List<BulkEndpointInfo> endpoints,
-            int maxAttempts) throws Exception {
-        return send(null, file, endpoints, maxAttempts);
-    }
-
     private static final class ChunkTransferResult {
         final Candidate candidate;
         final long bytes;
 
-        ChunkTransferResult(Candidate candidate, long bytes) {
+        ChunkTransferResult(
+                Candidate candidate,
+                long bytes) {
             this.candidate = candidate;
             this.bytes = bytes;
         }
@@ -83,6 +78,15 @@ public final class MultipathFileTransfer {
             this.durationNanos = durationNanos;
             this.error = error;
         }
+    }
+
+    private MultipathFileTransfer() {}
+
+    public static long send(
+            File file,
+            List<BulkEndpointInfo> endpoints,
+            int maxAttempts) throws Exception {
+        return send(null, file, endpoints, maxAttempts);
     }
 
     public static long send(
@@ -111,12 +115,13 @@ public final class MultipathFileTransfer {
                 UUID.randomUUID().toString();
         long countLong =
                 (file.length() + CHUNK - 1L) / CHUNK;
+
         if (countLong > MAX_CHUNKS) {
             throw new IllegalArgumentException(
                     "File exceeds multipath transfer limit");
         }
-        int chunkCount = (int) countLong;
 
+        int chunkCount = (int) countLong;
         NetworkPathCatalog catalog =
                 context == null
                         ? null
@@ -128,6 +133,7 @@ public final class MultipathFileTransfer {
 
         List<Candidate> candidates =
                 new ArrayList<>();
+
         for (BulkEndpointInfo endpoint : endpoints) {
             if (endpoint == null
                     || endpoint.host == null
@@ -136,31 +142,41 @@ public final class MultipathFileTransfer {
                 continue;
             }
 
-            boolean matched = false;
-            for (NetworkPathCatalog.Path path : localPaths) {
-                if (!endpoint.transport.equals(path.kind)) {
-                    continue;
-                }
+            Network selectedNetwork = null;
+            String networkId = null;
 
-                candidates.add(new Candidate(
-                        endpoint,
-                        path.network,
-                        endpoint.transport
-                                + ":" + endpoint.host
-                                + ":" + endpoint.port
-                                + "@" + path.id));
-                matched = true;
+            for (NetworkPathCatalog.Path path
+                    : localPaths) {
+                if (endpoint.transport.equals(
+                        path.kind)) {
+                    selectedNetwork = path.network;
+                    networkId = path.id;
+                    break;
+                }
             }
 
-            if (!matched) {
-                candidates.add(new Candidate(
-                        endpoint,
-                        null,
-                        endpoint.transport
-                                + ":" + endpoint.host
-                                + ":" + endpoint.port));
+            String pathId = endpoint.transport
+                    + ":" + endpoint.host
+                    + ":" + endpoint.port
+                    + (networkId == null
+                            ? ""
+                            : "@" + networkId);
+
+            candidates.add(new Candidate(
+                    endpoint,
+                    selectedNetwork,
+                    pathId));
+        }
+
+        // Remove duplicate endpoint/network tuples before scheduling.
+        List<Candidate> unique = new ArrayList<>();
+        Set<String> seenPathIds = new HashSet<>();
+        for (Candidate candidate : candidates) {
+            if (seenPathIds.add(candidate.pathId)) {
+                unique.add(candidate);
             }
         }
+        candidates = unique;
 
         if (candidates.isEmpty()) {
             throw new IllegalArgumentException(
@@ -178,15 +194,13 @@ public final class MultipathFileTransfer {
         }
 
         int workers = Math.min(
-                candidates.size() * 2,
+                Math.max(1, candidates.size() * 2),
                 Math.max(1, chunkCount));
 
         ExecutorService pool =
                 Executors.newFixedThreadPool(workers);
-        java.util.concurrent.CompletionService<ChunkOutcome>
-                completion =
-                new java.util.concurrent.ExecutorCompletionService<>(
-                        pool);
+        CompletionService<ChunkOutcome> completion =
+                new ExecutorCompletionService<>(pool);
 
         int nextChunk = 0;
         int inFlight = 0;
@@ -226,8 +240,8 @@ public final class MultipathFileTransfer {
                 double seconds =
                         Math.max(
                                 1e-6,
-                                outcome.durationNanos
-                                        / 1e9);
+                                outcome.durationNanos / 1e9);
+
                 path.observe(
                         outcome.bytes / seconds,
                         -1);
@@ -254,6 +268,7 @@ public final class MultipathFileTransfer {
                                 + total + "/"
                                 + file.length());
             }
+
             return total;
         } finally {
             pool.shutdownNow();
@@ -261,8 +276,7 @@ public final class MultipathFileTransfer {
     }
 
     private static void submitChunk(
-            java.util.concurrent.CompletionService<ChunkOutcome>
-                    completion,
+            CompletionService<ChunkOutcome> completion,
             SpectralPathScheduler scheduler,
             List<Candidate> candidates,
             File file,
@@ -300,6 +314,7 @@ public final class MultipathFileTransfer {
                                 offset,
                                 length,
                                 maxAttempts);
+
                 return new ChunkOutcome(
                         sent.candidate,
                         sent.bytes,
@@ -323,15 +338,17 @@ public final class MultipathFileTransfer {
                 allocations = scheduler.allocate();
 
         if (allocations.isEmpty()) {
-            return candidates.get(chunk % candidates.size());
+            return candidates.get(
+                    chunk % candidates.size());
         }
 
         double target =
                 (chunk * 0.6180339887498949) % 1.0;
-        double cumulative = 0;
+        double cumulative = 0.0;
         String selected =
                 allocations.get(
-                        allocations.size() - 1).pathId;
+                        allocations.size() - 1)
+                        .pathId;
 
         for (SpectralPathScheduler.Allocation allocation
                 : allocations) {
@@ -347,7 +364,9 @@ public final class MultipathFileTransfer {
                 return candidate;
             }
         }
-        return candidates.get(chunk % candidates.size());
+
+        return candidates.get(
+                chunk % candidates.size());
     }
 
     private static ChunkTransferResult sendChunk(
@@ -380,17 +399,21 @@ public final class MultipathFileTransfer {
                                 chunkCount,
                                 offset,
                                 length);
+
                 return new ChunkTransferResult(
                         candidate, sent);
             } catch (Exception error) {
                 last = error;
+
                 scheduler.path(
                         candidate.pathId,
                         candidate.endpoint.transport)
                         .observeFailure();
                 failedPaths.add(candidate.pathId);
 
-                if (attempt == maxAttempts) break;
+                if (attempt == maxAttempts) {
+                    break;
+                }
 
                 candidate = chooseAlternative(
                         scheduler,
@@ -400,9 +423,10 @@ public final class MultipathFileTransfer {
                         attempt);
 
                 try {
-                    Thread.sleep(Math.min(
-                            2000L,
-                            100L * attempt * attempt));
+                    Thread.sleep(
+                            Math.min(
+                                    2000L,
+                                    100L * attempt * attempt));
                 } catch (InterruptedException interrupted) {
                     Thread.currentThread().interrupt();
                     throw interrupted;
@@ -422,7 +446,8 @@ public final class MultipathFileTransfer {
             Set<String> failedPaths,
             int chunk,
             int attempt) {
-        if (failedPaths.size() >= candidates.size()) {
+        if (failedPaths.size()
+                >= candidates.size()) {
             failedPaths.clear();
             return chooseCandidate(
                     scheduler,
@@ -430,13 +455,17 @@ public final class MultipathFileTransfer {
                     chunk + attempt * 7919);
         }
 
-        List<SpectralPathScheduler.Allocation> allocations =
+        List<SpectralPathScheduler.Allocation>
+                allocations =
                 scheduler.allocate();
+
         if (!allocations.isEmpty()) {
             double total = 0;
+
             for (SpectralPathScheduler.Allocation allocation
                     : allocations) {
-                if (!failedPaths.contains(allocation.pathId)) {
+                if (!failedPaths.contains(
+                        allocation.pathId)) {
                     total += allocation.fraction;
                 }
             }
@@ -444,17 +473,23 @@ public final class MultipathFileTransfer {
             if (total > 0) {
                 double target =
                         ((chunk + attempt * 0.5)
-                                * 0.6180339887498949) % 1.0;
+                                * 0.6180339887498949)
+                                % 1.0;
                 double cumulative = 0;
 
                 for (SpectralPathScheduler.Allocation allocation
                         : allocations) {
-                    if (failedPaths.contains(allocation.pathId)) {
+                    if (failedPaths.contains(
+                            allocation.pathId)) {
                         continue;
                     }
-                    cumulative += allocation.fraction / total;
+
+                    cumulative +=
+                            allocation.fraction / total;
+
                     if (target <= cumulative) {
-                        for (Candidate candidate : candidates) {
+                        for (Candidate candidate
+                                : candidates) {
                             if (candidate.pathId.equals(
                                     allocation.pathId)) {
                                 return candidate;
@@ -466,10 +501,12 @@ public final class MultipathFileTransfer {
         }
 
         for (Candidate candidate : candidates) {
-            if (!failedPaths.contains(candidate.pathId)) {
+            if (!failedPaths.contains(
+                    candidate.pathId)) {
                 return candidate;
             }
         }
+
         return candidates.get(
                 chunk % candidates.size());
     }
@@ -486,6 +523,7 @@ public final class MultipathFileTransfer {
         byte[] token =
                 BulkTransferProtocol.decodeToken(
                         candidate.endpoint.tokenBase64);
+
         if (token.length
                 != MultipathCrypto.TOKEN_BYTES) {
             throw new java.io.IOException(
@@ -493,7 +531,8 @@ public final class MultipathFileTransfer {
         }
 
         byte[] iv =
-                new byte[MultipathCrypto.GCM_IV_BYTES];
+                new byte[
+                        MultipathCrypto.GCM_IV_BYTES];
         RANDOM.nextBytes(iv);
 
         byte[] aad =
@@ -566,7 +605,8 @@ public final class MultipathFileTransfer {
             byte[] plaintext =
                     new byte[(int) length];
             try (RandomAccessFile source =
-                         new RandomAccessFile(file, "r");
+                         new RandomAccessFile(
+                                 file, "r");
                  FileChannel channel =
                          source.getChannel()) {
                 ByteBuffer buffer =
@@ -598,21 +638,27 @@ public final class MultipathFileTransfer {
             out.write(ciphertext);
             out.flush();
 
-            int responseMagic = in.readInt();
-            int version = in.readInt();
-            int status = in.readInt();
-            long acknowledged = in.readLong();
+            int responseMagic =
+                    in.readInt();
+            int version =
+                    in.readInt();
+            int status =
+                    in.readInt();
+            long acknowledged =
+                    in.readLong();
 
             if (responseMagic
-                    != 0x4241434B
+                        != 0x4241434B
                     || version != VERSION
                     || status != 0
                     || acknowledged != length) {
                 throw new java.io.IOException(
                         "Chunk rejected: status="
-                                + status + " ack="
+                                + status
+                                + " ack="
                                 + acknowledged);
             }
+
             return length;
         }
     }
@@ -636,9 +682,12 @@ public final class MultipathFileTransfer {
                 name.getBytes(
                         StandardCharsets.UTF_8);
 
-        if (authorizationTag == null
-                || authorizationTag.length
-                        != MultipathCrypto.HASH_BYTES
+        if (authorizationTag.length
+                    != MultipathCrypto.HASH_BYTES
+                || hash.length
+                    != MultipathCrypto.HASH_BYTES
+                || iv.length
+                    != MultipathCrypto.GCM_IV_BYTES
                 || id.length == 0
                 || id.length > MAX_ID
                 || filename.length == 0
@@ -650,18 +699,17 @@ public final class MultipathFileTransfer {
                 || offset > fileSize - length
                 || chunkIndex < 0
                 || chunkIndex >= chunkCount
-                || chunkCount > MAX_CHUNKS
-                || iv == null
-                || iv.length
-                        != MultipathCrypto.GCM_IV_BYTES) {
+                || chunkCount > MAX_CHUNKS) {
             throw new java.io.IOException(
                     "Invalid chunk request");
         }
 
         out.writeInt(MAGIC);
         out.writeInt(VERSION);
-        out.writeInt(authorizationTag.length);
-        out.write(authorizationTag);
+        out.writeInt(
+                authorizationTag.length);
+        out.write(
+                authorizationTag);
         out.writeInt(id.length);
         out.write(id);
         out.writeLong(fileSize);
@@ -673,5 +721,6 @@ public final class MultipathFileTransfer {
         out.writeInt(filename.length);
         out.write(filename);
         out.write(iv);
+        out.flush();
     }
 }
