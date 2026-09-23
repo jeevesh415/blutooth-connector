@@ -115,23 +115,15 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
 
         bulkExecutor.execute(() -> {
-            Exception last = null;
-            for (BulkEndpointInfo endpoint : session.bulkEndpoints) {
-                try {
-                    if (endpoint.host.isEmpty() || endpoint.port < 1) continue;
-                    byte[] token = BulkTransferProtocol.decodeToken(endpoint.tokenBase64);
-                    long bytes = ReliableFileTransfer.sendWithResume(
-                            file, endpoint.host, endpoint.port, token, 5);
-                    if (listener != null) listener.onComplete(session, bytes);
-                    return;
-                } catch (Exception error) {
-                    last = error;
+            try {
+                List<BulkEndpointInfo> endpoints = new ArrayList<>(session.bulkEndpoints);
+                if (endpoints.isEmpty()) {
+                    throw new IllegalStateException("No bulk endpoint advertised");
                 }
-            }
-            if (listener != null) {
-                listener.onError(session, last == null
-                        ? new IllegalStateException("No bulk endpoint advertised")
-                        : last);
+                long bytes = MultipathFileTransfer.send(file, endpoints, 4);
+                if (listener != null) listener.onComplete(session, bytes);
+            } catch (Exception error) {
+                if (listener != null) listener.onError(session, error);
             }
         });
     }
