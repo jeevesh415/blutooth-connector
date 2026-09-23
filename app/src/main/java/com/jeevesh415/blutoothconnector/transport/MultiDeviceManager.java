@@ -80,7 +80,6 @@ public final class MultiDeviceManager implements AutoCloseable {
                     "Application peer limit reached: " + MAX_CLASSIC_PEERS);
         }
         knownDevices.put(device.getAddress(), device);
-        retryAttempts.remove(device.getAddress());
         transport.connect(device);
     }
 
