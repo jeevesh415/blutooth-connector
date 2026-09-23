@@ -20,7 +20,7 @@ public final class BulkEndpointInfo {
                 json.optString("token", ""));
     }
 
-    public JSONObject toJson() {
+    public JSONObject toJson() throws org.json.JSONException {
         return new JSONObject()
                 .put("host", host)
                 .put("port", port)
