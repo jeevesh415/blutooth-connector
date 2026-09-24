@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService;
 import android.accessibilityservice.GestureDescription;
 import android.graphics.Path;
 import android.os.Bundle;
+import android.view.WindowManager;
 import android.view.accessibility.AccessibilityEvent;
 import android.view.accessibility.AccessibilityNodeInfo;
 
@@ -101,9 +102,18 @@ public final class RemoteInputAccessibilityService extends AccessibilityService 
     }
 
     private boolean validCoordinate(float x, float y) {
-        return x >= 0 && y >= 0
-                && x <= getResources().getDisplayMetrics().widthPixels
-                && y <= getResources().getDisplayMetrics().heightPixels;
+        if (x < 0 || y < 0) return false;
+        if (android.os.Build.VERSION.SDK_INT >= 30) {
+            WindowManager wm = getSystemService(WindowManager.class);
+            if (wm != null) {
+                android.graphics.Rect bounds =
+                        wm.getCurrentWindowMetrics().getBounds();
+                return x <= bounds.width() && y <= bounds.height();
+            }
+        }
+        android.util.DisplayMetrics metrics =
+                getResources().getDisplayMetrics();
+        return x <= metrics.widthPixels && y <= metrics.heightPixels;
     }
 
     private boolean setFocusedText(String text) {
