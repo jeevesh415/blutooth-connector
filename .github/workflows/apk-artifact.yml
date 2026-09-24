@@ -1,5 +1,9 @@
 name: Android APK
 
+concurrency:
+  group: android-apk-${{ github.workflow }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ main ]
