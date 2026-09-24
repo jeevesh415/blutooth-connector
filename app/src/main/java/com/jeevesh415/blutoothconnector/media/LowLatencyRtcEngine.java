@@ -157,8 +157,7 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
                     @Override public void onStandardizedIceConnectionChange(
                             PeerConnection.IceConnectionState state) {}
 
-                    @Override public void onSelectedCandidatePairChanged(
-                            PeerConnection.CandidatePairChangeEvent event) {}
+
 
                     @Override public void onRenegotiationNeeded() {}
 
