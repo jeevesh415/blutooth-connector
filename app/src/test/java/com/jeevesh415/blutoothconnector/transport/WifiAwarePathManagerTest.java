@@ -21,7 +21,7 @@ public final class WifiAwarePathManagerTest {
 
         assertEquals(
                 41871,
-                WifiAwarePathManager.parsePortForTest(message));
+                WifiAwarePathManager.parsePort(message));
     }
 
     @Test public void rejectsWrongPrefixAndInvalidPort() {
