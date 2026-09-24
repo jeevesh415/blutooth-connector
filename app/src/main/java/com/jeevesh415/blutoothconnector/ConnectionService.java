@@ -204,7 +204,8 @@ public final class ConnectionService extends Service {
                 catch (Exception ignored) {}
             }
             wifiAware = null;
-            throw error;
+            throw new IllegalStateException(
+                    "Could not start Wi-Fi Aware transport", error);
         } finally {
             java.util.Arrays.fill(token, (byte) 0);
         }
