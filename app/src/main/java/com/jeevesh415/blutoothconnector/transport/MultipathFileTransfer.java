@@ -149,6 +149,9 @@ public final class MultipathFileTransfer {
                 if (!endpoint.transport.equals(path.kind)) {
                     continue;
                 }
+                if (!path.canRouteTo(endpoint.host)) {
+                    continue;
+                }
 
                 String pathId = endpoint.transport
                         + ":" + endpoint.host
