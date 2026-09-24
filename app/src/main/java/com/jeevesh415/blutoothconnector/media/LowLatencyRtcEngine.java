@@ -54,6 +54,7 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     private final EglBase eglBase;
     private final PeerConnectionFactory factory;
     private final PeerConnection peer;
+    private static final AtomicBoolean INITIALIZED = new AtomicBoolean();
     private final AtomicBoolean closed = new AtomicBoolean();
 
     private AudioSource audioSource;
@@ -65,6 +66,7 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     private DataChannel controlChannel;
 
     public static void initialize(Context context) {
+        if (!INITIALIZED.compareAndSet(false, true)) return;
         PeerConnectionFactory.initialize(
                 PeerConnectionFactory.InitializationOptions.builder(context)
                         .setEnableInternalTracer(false)
@@ -172,8 +174,6 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
                     @Override public void onIceCandidatesRemoved(
                             IceCandidate[] candidates) {}
 
-                    @Override public void onIceConnectionReceivingChange(
-                            boolean receiving, int ignored) {}
                 });
 
         if (peer == null) {
@@ -213,6 +213,7 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
                 projectionData,
                 new android.media.projection.MediaProjection.Callback() {
                     @Override public void onStop() {
+                        releaseScreenCaptureAfterProjectionStop();
                         listener.onState("mediaProjection:stopped");
                     }
                 });
@@ -318,6 +319,22 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
 
     public synchronized void addIce(String sdpMid, int sdpMLineIndex, String candidate) {
         peer.addIceCandidate(new IceCandidate(sdpMid, sdpMLineIndex, candidate));
+    }
+
+    private synchronized void releaseScreenCaptureAfterProjectionStop() {
+        screenCapturer = null;
+        if (surfaceTextureHelper != null) {
+            surfaceTextureHelper.dispose();
+            surfaceTextureHelper = null;
+        }
+        if (videoTrack != null) {
+            videoTrack.dispose();
+            videoTrack = null;
+        }
+        if (videoSource != null) {
+            videoSource.dispose();
+            videoSource = null;
+        }
     }
 
     @Override public synchronized void close() {
