@@ -3,7 +3,9 @@ package com.jeevesh415.blutoothconnector.media;
 import android.content.Context;
 import android.content.Intent;
 
+import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
+import com.jeevesh415.blutoothconnector.protocol.ControlReplayGuard;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
@@ -13,19 +15,18 @@ import org.webrtc.IceCandidate;
 
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicLong;
 
 /**
- * Couples the existing reliable Bluetooth control plane to WebRTC signaling.
+ * Couples Bluetooth RFCOMM signaling to WebRTC real-time media.
  *
- * Design:
- *   Bluetooth RFCOMM = rendezvous/signaling/control
- *   WebRTC SRTP      = real-time media
- *   WebRTC DataChannel = low-latency remote input
- *
- * This avoids putting video/audio through JSON/RFCOMM and therefore keeps
- * large media frames away from the control channel.
+ * Remote input is an explicitly authorized capability. Pairing alone does
+ * not grant Accessibility-backed control.
  */
 public final class RtcPeerManager implements AutoCloseable {
+    private static final int CONTROL_VERSION = 2;
+    private static final int MAX_CONTROL_BYTES = 8192;
+
     public interface Listener {
         void onRemoteVideo(String peerAddress, org.webrtc.VideoTrack track);
         void onState(String peerAddress, String state);
@@ -34,7 +35,14 @@ public final class RtcPeerManager implements AutoCloseable {
 
     private final Context context;
     private volatile Listener listener;
-    private final Map<String, LowLatencyRtcEngine> engines = new ConcurrentHashMap<>();
+    private final Map<String, LowLatencyRtcEngine> engines =
+            new ConcurrentHashMap<>();
+    private final Map<String, org.webrtc.VideoTrack> lastRemoteVideos =
+            new ConcurrentHashMap<>();
+    private final Map<String, ControlReplayGuard> inboundControl =
+            new ConcurrentHashMap<>();
+    private final Map<String, AtomicLong> outboundControl =
+            new ConcurrentHashMap<>();
 
     public RtcPeerManager(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -43,13 +51,38 @@ public final class RtcPeerManager implements AutoCloseable {
     }
 
     public void setListener(Listener listener) {
-        if (listener != null) this.listener = listener;
+        if (listener == null) return;
+        this.listener = listener;
+        for (Map.Entry<String, org.webrtc.VideoTrack> entry : lastRemoteVideos.entrySet()) {
+            try {
+                listener.onRemoteVideo(entry.getKey(), entry.getValue());
+            } catch (Exception ignored) {}
+        }
     }
 
     public void sendControl(String peerAddress, JSONObject command) {
+        if (command == null) throw new IllegalArgumentException("command");
+        if (!isRemoteControlAuthorized(peerAddress)) {
+            throw new SecurityException("Remote control is not authorized for this peer");
+        }
+
         LowLatencyRtcEngine engine = engines.get(peerAddress);
         if (engine == null) throw new IllegalStateException("RTC session not found");
-        engine.sendControl(command.toString());
+
+        AtomicLong sequence = outboundControl.computeIfAbsent(
+                peerAddress, ignored -> new AtomicLong());
+        long seq = sequence.incrementAndGet();
+
+        JSONObject envelope = new JSONObject()
+                .put("v", CONTROL_VERSION)
+                .put("seq", seq)
+                .put("command", command);
+
+        String text = envelope.toString();
+        if (text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_CONTROL_BYTES) {
+            throw new IllegalArgumentException("Control message too large");
+        }
+        engine.sendControl(text);
     }
 
     public void startPublisher(DeviceSession session,
@@ -59,16 +92,19 @@ public final class RtcPeerManager implements AutoCloseable {
                                int fps) {
         final String peer = session.address();
         stop(peer);
+        outboundControl.computeIfAbsent(peer, ignored -> new AtomicLong());
+        inboundControl.computeIfAbsent(peer, ignored -> new ControlReplayGuard());
+
         LowLatencyRtcEngine engine = create(session);
         try {
             engine.addMicrophone();
             engine.startScreen(projectionData, width, height, fps);
             engine.createControlChannel();
             engine.createOffer();
-        } catch (Exception e) {
-            engines.remove(peer);
+        } catch (Exception error) {
+            engines.remove(peer, engine);
             engine.close();
-            listener.onError(peer, e);
+            listener.onError(peer, error);
         }
     }
 
@@ -78,29 +114,32 @@ public final class RtcPeerManager implements AutoCloseable {
             switch (frame.type) {
                 case Protocol.RTC_OFFER:
                     LowLatencyRtcEngine receiver = engines.get(peer);
-                    if (receiver == null) receiver = create(session);
+                    if (receiver == null) {
+                        receiver = create(session);
+                    }
                     receiver.acceptOffer(frame.payload.getString("sdp"));
                     break;
                 case Protocol.RTC_ANSWER:
                     LowLatencyRtcEngine publisher = engines.get(peer);
-                    if (publisher == null) throw new IllegalStateException("RTC session not found");
+                    if (publisher == null) {
+                        throw new IllegalStateException("RTC session not found");
+                    }
                     publisher.acceptAnswer(frame.payload.getString("sdp"));
                     break;
                 case Protocol.RTC_ICE:
                     LowLatencyRtcEngine engine = engines.get(peer);
-                    if (engine == null) throw new IllegalStateException("RTC session not found");
+                    if (engine == null) {
+                        throw new IllegalStateException("RTC session not found");
+                    }
                     engine.addIce(
                             frame.payload.optString("sdpMid", null),
                             frame.payload.optInt("sdpMLineIndex", 0),
                             frame.payload.getString("candidate"));
                     break;
                 case Protocol.RTC_CONTROL:
-                    RemoteInputAccessibilityService accessibility =
-                            RemoteInputAccessibilityService.instance();
-                    if (accessibility == null) {
-                        throw new SecurityException("Remote input service is not enabled by the user");
-                    }
-                    accessibility.execute(frame.payload.getJSONObject("command"));
+                    handleControlEnvelope(
+                            peer,
+                            frame.payload.toString());
                     break;
                 case Protocol.RTC_STOP:
                     stop(peer);
@@ -108,22 +147,64 @@ public final class RtcPeerManager implements AutoCloseable {
                 default:
                     break;
             }
-        } catch (Exception e) {
-            listener.onError(peer, e);
+        } catch (Exception error) {
+            listener.onError(peer, error);
         }
+    }
+
+    private void handleControlEnvelope(String peer, String text) throws Exception {
+        if (text == null
+                || text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_CONTROL_BYTES) {
+            throw new SecurityException("Control message rejected");
+        }
+        if (!isRemoteControlAuthorized(peer)) {
+            throw new SecurityException("Remote control is not authorized for this peer");
+        }
+
+        JSONObject envelope = new JSONObject(text);
+        if (envelope.optInt("v", -1) != CONTROL_VERSION) {
+            throw new SecurityException("Unsupported control envelope version");
+        }
+
+        long sequence = envelope.optLong("seq", 0);
+        ControlReplayGuard guard = inboundControl.computeIfAbsent(
+                peer, ignored -> new ControlReplayGuard());
+        if (!guard.accept(sequence)) {
+            throw new SecurityException("Replay or out-of-order control message rejected");
+        }
+
+        JSONObject command = envelope.optJSONObject("command");
+        if (command == null) {
+            throw new SecurityException("Missing control command");
+        }
+
+        RemoteInputAccessibilityService accessibility =
+                RemoteInputAccessibilityService.instance();
+        if (accessibility == null) {
+            throw new SecurityException(
+                    "Remote input service is not enabled by the user");
+        }
+        if (!accessibility.execute(command)) {
+            throw new SecurityException("Remote input command was rejected");
+        }
+    }
+
+    private boolean isRemoteControlAuthorized(String peerAddress) {
+        return RemoteInputAccessibilityService.instance() != null
+                && RemoteControlAuthorization.isAuthorized(context, peerAddress);
     }
 
     private LowLatencyRtcEngine create(DeviceSession session) {
         final String peer = session.address();
-        LowLatencyRtcEngine engine = new LowLatencyRtcEngine(
+        final LowLatencyRtcEngine engine = new LowLatencyRtcEngine(
                 context,
                 new LowLatencyRtcEngine.Listener() {
                     @Override public void onLocalOffer(String sdp) {
                         try {
                             send(session, Protocol.RTC_OFFER,
                                     new JSONObject().put("sdp", sdp));
-                        } catch (Exception e) {
-                            listener.onError(peer, e);
+                        } catch (Exception error) {
+                            listener.onError(peer, error);
                         }
                     }
 
@@ -131,8 +212,8 @@ public final class RtcPeerManager implements AutoCloseable {
                         try {
                             send(session, Protocol.RTC_ANSWER,
                                     new JSONObject().put("sdp", sdp));
-                        } catch (Exception e) {
-                            listener.onError(peer, e);
+                        } catch (Exception error) {
+                            listener.onError(peer, error);
                         }
                     }
 
@@ -143,27 +224,25 @@ public final class RtcPeerManager implements AutoCloseable {
                                             .put("sdpMid", candidate.sdpMid)
                                             .put("sdpMLineIndex", candidate.sdpMLineIndex)
                                             .put("candidate", candidate.sdp));
-                        } catch (Exception e) {
-                            listener.onError(peer, e);
+                        } catch (Exception error) {
+                            listener.onError(peer, error);
                         }
                     }
 
                     @Override public void onRemoteVideo(org.webrtc.VideoTrack track) {
-                        listener.onRemoteVideo(peer, track);
+                        lastRemoteVideos.put(peer, track);
+                        try {
+                            listener.onRemoteVideo(peer, track);
+                        } catch (Exception error) {
+                            listener.onError(peer, error);
+                        }
                     }
 
                     @Override public void onDataMessage(String text) {
                         try {
-                            JSONObject command = new JSONObject(text);
-                            RemoteInputAccessibilityService accessibility =
-                                    RemoteInputAccessibilityService.instance();
-                            if (accessibility == null) {
-                                listener.onState(peer, "remote-input-not-enabled");
-                                return;
-                            }
-                            accessibility.execute(command);
-                        } catch (Exception e) {
-                            listener.onError(peer, e);
+                            handleControlEnvelope(peer, text);
+                        } catch (Exception error) {
+                            listener.onError(peer, error);
                         }
                     }
 
@@ -175,6 +254,7 @@ public final class RtcPeerManager implements AutoCloseable {
                         listener.onError(peer, error);
                     }
                 });
+
         LowLatencyRtcEngine old = engines.put(peer, engine);
         if (old != null) old.close();
         return engine;
@@ -188,18 +268,25 @@ public final class RtcPeerManager implements AutoCloseable {
                     session.nextSequence(),
                     System.currentTimeMillis(),
                     payload));
-        } catch (Exception e) {
-            listener.onError(session.address(), e);
+        } catch (Exception error) {
+            listener.onError(session.address(), error);
         }
     }
 
     public void stop(String peerAddress) {
         LowLatencyRtcEngine engine = engines.remove(peerAddress);
-        if (engine != null) engine.close();
+        if (engine != null) {
+            engine.close();
+            lastRemoteVideos.remove(peerAddress);
+        }
     }
 
     @Override public void close() {
-        for (LowLatencyRtcEngine engine : engines.values()) engine.close();
+        for (LowLatencyRtcEngine engine : engines.values()) {
+            engine.close();
+        }
         engines.clear();
+        lastRemoteVideos.clear();
+        inboundControl.clear();
     }
 }
