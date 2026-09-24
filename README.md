@@ -94,6 +94,12 @@ The repository now includes a WebRTC real-time path bootstrapped by Bluetooth RF
 
 **System playback audio is not represented as microphone audio.** The current implementation deliberately advertises and starts microphone capture only. Android's AudioPlaybackCapture API can capture eligible playback streams with a separate user-consent flow, but integrating that PCM source into the WebRTC audio device path is not yet part of this build.
 
+## Wi-Fi Aware path
+
+Wi-Fi Aware is wired into the bulk multipath architecture on supported Android 12+ devices. Each side publishes/subscribes to the BCL service, establishes a secure Aware data path using the existing 32-byte BCL3 key as the PMK, and exposes the resulting Android Network as a wifi-aware bulk endpoint.
+
+The path remains optional: device support and current Aware availability are checked at runtime. Bluetooth RFCOMM remains the control/signaling and capability channel.
+
 ## Android 17 / local-network behavior
 
 Because the app targets SDK 37, Android local-network access must be explicitly granted before operations that use local TCP/UDP networking. The UI requests this permission when file transfer or real-time streaming needs it. Nearby Wi-Fi permissions are requested separately for Wi-Fi Direct.
