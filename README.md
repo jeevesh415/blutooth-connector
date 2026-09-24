@@ -37,7 +37,7 @@ The application must never assume unrestricted Android control. Each capability 
 
 Every device relationship should be explicitly paired and revocable. Commands should be authenticated, sessions encrypted, and capabilities authorized independently. The receiver must reject unsupported or unauthorized operations.
 
-## Current milestone - 0.5
+## Current milestone - 0.6
 
 The repository now contains the bidirectional Bluetooth control plane, capability routing, adaptive command retries, foreground service ownership, encrypted BCL3 multipath bulk transfer, Android Network-specific path binding, and automated JVM/loopback verification.
 
@@ -106,7 +106,7 @@ Because the app targets SDK 37, Android local-network access must be explicitly 
 
 ## Security boundary
 
-Bluetooth pairing is the transport relationship, not authorization for high-risk actions. Bulk transfer uses per-transfer bearer tokens, HMAC authorization proofs, AES-256-GCM, and a final SHA-256 integrity check. Remote Accessibility control additionally requires an explicit peer grant on the receiving phone.
+Bluetooth pairing is the transport relationship, not authorization for high-risk actions. Bulk transfer uses per-transfer bearer tokens, HMAC authorization proofs, AES-256-GCM, deterministic transfer/chunk-bound 96-bit GCM nonces, and a final SHA-256 integrity check. Retries reuse the same nonce only for the same authenticated transfer/chunk; a different chunk or transfer derives a different nonce. Remote Accessibility control additionally requires an explicit peer grant on the receiving phone.
 
 This is still not a full production identity system: there is no certificate-backed device identity, X25519 enrollment protocol, or end-to-end audit trail. Those require a larger protocol migration and should not be inferred from Bluetooth pairing alone.
 
@@ -153,3 +153,17 @@ The mathematical layer is deliberately used for **scheduling**, not for pretendi
 ### Research direction
 
 The architecture is compatible with a future path-ID model similar to multipath QUIC: independent path state, path-specific sequencing/congestion control, and an application scheduler above the transport. Android Wi-Fi Direct provides a direct peer-to-peer path, while Wi-Fi Aware supports direct high-speed bidirectional connections when a socket is established. These are candidates for additional channels, not assumptions that every phone supports them.
+
+
+## Validation boundary
+
+The repository is designed so every transport/capability is optional and negotiated from actual Android/device support. The automated suite can verify protocol, crypto, persistence, scheduling, and build behavior, but it cannot prove physical radio coexistence, measured end-to-end media latency, or hardware encoder performance. Those require two real Android devices.
+
+Current explicit limitations:
+
+- WebRTC media uses normal ICE path selection; true multipath RTP is not implemented.
+- Microphone capture is implemented; Android playback capture is not yet wired into the WebRTC audio device path.
+- Remote input requires the user to enable the AccessibilityService and separately authorize the Bluetooth peer.
+- Bluetooth pairing is not a certificate-backed application identity system.
+- Android 17 local-network and nearby-Wi-Fi permissions are requested at the point of use.
+- Wi-Fi Direct/Aware availability and simultaneous independent paths depend on the device chipset, Android routing, and RF environment.
