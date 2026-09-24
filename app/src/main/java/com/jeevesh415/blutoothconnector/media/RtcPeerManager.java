@@ -75,13 +75,17 @@ public final class RtcPeerManager implements AutoCloseable {
         }
         long seq = sequence.incrementAndGet();
 
-        JSONObject envelope = new JSONObject()
-                .put("v", CONTROL_VERSION)
-                .put("sid", sessionId)
-                .put("seq", seq)
-                .put("command", command);
-
-        String text = envelope.toString();
+        final String text;
+        try {
+            JSONObject envelope = new JSONObject()
+                    .put("v", CONTROL_VERSION)
+                    .put("sid", sessionId)
+                    .put("seq", seq)
+                    .put("command", command);
+            text = envelope.toString();
+        } catch (org.json.JSONException error) {
+            throw new IllegalStateException("Could not encode control message", error);
+        }
         if (text.getBytes(java.nio.charset.StandardCharsets.UTF_8).length > MAX_CONTROL_BYTES) {
             throw new IllegalArgumentException("Control message too large");
         }
