@@ -44,15 +44,15 @@ public final class RemoteInputAccessibilityService extends AccessibilityService 
         String type = command.optString("type", "");
         if ("tap".equals(type)) {
             return tap(
-                    command.optFloat("x", -1),
-                    command.optFloat("y", -1));
+                    (float) command.optDouble("x", -1),
+                    (float) command.optDouble("y", -1));
         }
         if ("swipe".equals(type)) {
             return swipe(
-                    command.optFloat("x1", -1),
-                    command.optFloat("y1", -1),
-                    command.optFloat("x2", -1),
-                    command.optFloat("y2", -1),
+                    (float) command.optDouble("x1", -1),
+                    (float) command.optDouble("y1", -1),
+                    (float) command.optDouble("x2", -1),
+                    (float) command.optDouble("y2", -1),
                     Math.max(1, Math.min(2000, command.optLong("durationMs", 250))));
         }
         if ("back".equals(type)) {
