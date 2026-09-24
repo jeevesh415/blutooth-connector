@@ -219,7 +219,7 @@ public final class WifiAwarePathManager implements AutoCloseable {
                             byte[] serviceSpecificInfo,
                             java.util.List<byte[]> matchFilter) {
                         int remotePort =
-                                parsePort(serviceSpecificInfo);
+                                parsePortForTest(serviceSpecificInfo);
                         if (remotePort <= 0) return;
 
                         synchronized (WifiAwarePathManager.this) {
@@ -410,7 +410,7 @@ public final class WifiAwarePathManager implements AutoCloseable {
         return output;
     }
 
-    private static int parsePort(byte[] info) {
+    static int parsePortForTest(byte[] info) {
         if (info == null
                 || info.length <= SERVICE_INFO_PREFIX.length) {
             return -1;
