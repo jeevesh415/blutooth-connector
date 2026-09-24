@@ -37,7 +37,7 @@ The application must never assume unrestricted Android control. Each capability 
 
 Every device relationship should be explicitly paired and revocable. Commands should be authenticated, sessions encrypted, and capabilities authorized independently. The receiver must reject unsupported or unauthorized operations.
 
-## Current milestone - 0.3
+## Current milestone - 0.5
 
 The repository now contains the bidirectional Bluetooth control plane, capability routing, adaptive command retries, foreground service ownership, encrypted BCL3 multipath bulk transfer, Android Network-specific path binding, and automated JVM/loopback verification.
 
@@ -78,6 +78,37 @@ There is deliberately no promise of zero physical link failures. The engineering
 Bluetooth Classic BR/EDR is designed for lower-bandwidth personal-area networking. The Bluetooth SIG lists a 1–3 Mb/s nominal data-rate range for BR/EDR and notes that all channels between two devices share the same physical link. citeturn422326search3turn422326search2
 
 Therefore the high-throughput strategy is not to fake a faster Bluetooth link. It is to keep Bluetooth as the robust control plane and opportunistically use a faster local IP path for the data plane.
+
+## Real-time screen + control
+
+The repository now includes a WebRTC real-time path bootstrapped by Bluetooth RFCOMM:
+
+- Android MediaProjection provides user-consented screen frames.
+- The microphone is captured through WebRTC audio capture.
+- WebRTC DataChannel carries interactive control messages separately from media.
+- The receiver's AccessibilityService is required for touch/navigation injection.
+- Remote control is additionally gated by an explicit per-peer authorization stored by the receiver.
+- Control envelopes carry a strictly increasing sequence number; replayed or out-of-order control messages are rejected.
+- The viewer maps touch coordinates to the actual received frame size and compensates for aspect-fit letterboxing.
+- If MediaProjection is revoked, screen-capture resources are released.
+
+**System playback audio is not represented as microphone audio.** The current implementation deliberately advertises and starts microphone capture only. Android's AudioPlaybackCapture API can capture eligible playback streams with a separate user-consent flow, but integrating that PCM source into the WebRTC audio device path is not yet part of this build.
+
+## Android 17 / local-network behavior
+
+Because the app targets SDK 37, Android local-network access must be explicitly granted before operations that use local TCP/UDP networking. The UI requests this permission when file transfer or real-time streaming needs it. Nearby Wi-Fi permissions are requested separately for Wi-Fi Direct.
+
+## Security boundary
+
+Bluetooth pairing is the transport relationship, not authorization for high-risk actions. Bulk transfer uses per-transfer bearer tokens, HMAC authorization proofs, AES-256-GCM, and a final SHA-256 integrity check. Remote Accessibility control additionally requires an explicit peer grant on the receiving phone.
+
+This is still not a full production identity system: there is no certificate-backed device identity, X25519 enrollment protocol, or end-to-end audit trail. Those require a larger protocol migration and should not be inferred from Bluetooth pairing alone.
+
+## Multipath boundary
+
+The bulk path can stripe chunks across distinct Android Network objects and now filters candidates by the route table for the advertised destination. This can exploit genuinely independent connectivity when Android and the hardware expose it.
+
+WebRTC media is **not** presented as multipath. It currently uses normal ICE/WebRTC path selection. True RTP multipath would require a dedicated media transport design or WebRTC stack changes.
 
 ## Current practical test
 
