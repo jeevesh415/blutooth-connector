@@ -4,6 +4,7 @@ import android.app.Activity;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.graphics.PointF;
 import android.os.Bundle;
 import android.os.IBinder;
 import android.view.MotionEvent;
@@ -17,14 +18,17 @@ import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 
 import org.json.JSONObject;
 import org.webrtc.EglBase;
+import org.webrtc.RendererCommon;
 import org.webrtc.SurfaceViewRenderer;
+import org.webrtc.VideoFrame;
+import org.webrtc.VideoSink;
 import org.webrtc.VideoTrack;
 
 /**
  * Phone-B viewer/controller.
  *
- * The remote surface is rendered directly by WebRTC. Touch events are sent
- * over the WebRTC DataChannel rather than through the media stream.
+ * The remote surface is rendered by WebRTC. Touch events use the actual
+ * received frame dimensions and account for aspect-fit letterboxing.
  */
 public final class RtcViewerActivity extends Activity {
     private SurfaceViewRenderer renderer;
@@ -35,6 +39,12 @@ public final class RtcViewerActivity extends Activity {
     private float downX;
     private float downY;
     private long downAt;
+
+    private EglBase eglBase;
+    private VideoTrack activeTrack;
+    private VideoSink activeSink;
+    private volatile int remoteWidth = 1280;
+    private volatile int remoteHeight = 720;
 
     private final ServiceConnection connection = new ServiceConnection() {
         @Override public void onServiceConnected(ComponentName name, IBinder binder) {
@@ -47,21 +57,28 @@ public final class RtcViewerActivity extends Activity {
             }
             service.rtc().setListener(new RtcPeerManager.Listener() {
                 @Override public void onRemoteVideo(String peer, VideoTrack track) {
-                    if (!peer.equals(peerAddress)) return;
-                    runOnUiThread(() -> {
-                        track.addSink(renderer);
-                        status.setText("Live screen: " + peer);
-                    });
+                    if (!peer.equals(peerAddress) || renderer == null) return;
+                    runOnUiThread(() -> attachTrack(track, peer));
                 }
 
                 @Override public void onState(String peer, String state) {
-                    runOnUiThread(() -> status.setText(
-                            "Stream " + peer + ": " + state));
+                    runOnUiThread(() -> {
+                        if (status != null) {
+                            status.setText("Stream " + peer + ": " + state);
+                        }
+                    });
                 }
 
                 @Override public void onError(String peer, Exception error) {
-                    runOnUiThread(() -> status.setText(
-                            "Stream error: " + error.getMessage()));
+                    runOnUiThread(() -> {
+                        if (status != null) {
+                            status.setText(
+                                    "Stream error: "
+                                            + (error == null
+                                                    ? "unknown"
+                                                    : error.getMessage()));
+                        }
+                    });
                 }
             });
             status.setText(
@@ -91,21 +108,62 @@ public final class RtcViewerActivity extends Activity {
 
         setContentView(root);
 
-        EglBase egl = EglBase.create();
-        renderer.init(egl.getEglBaseContext(), null);
+        eglBase = EglBase.create();
+        renderer.init(eglBase.getEglBaseContext(), null);
         renderer.setEnableHardwareScaler(true);
         renderer.setMirror(false);
-
+        renderer.setScalingType(RendererCommon.ScalingType.SCALE_ASPECT_FIT);
         renderer.setOnTouchListener(this::handleTouch);
 
         Intent intent = new Intent(this, ConnectionService.class);
         try {
-            if (android.os.Build.VERSION.SDK_INT >= 26) startForegroundService(intent);
-            else startService(intent);
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                startForegroundService(intent);
+            } else {
+                startService(intent);
+            }
             bindService(intent, connection, BIND_AUTO_CREATE);
-        } catch (Exception e) {
-            status.setText("Connection service error: " + e.getMessage());
+        } catch (Exception error) {
+            status.setText("Connection service error: " + error.getMessage());
         }
+    }
+
+    private void attachTrack(VideoTrack track, String peer) {
+        if (renderer == null) return;
+        if (activeTrack != null && activeSink != null) {
+            try { activeTrack.removeSink(activeSink); } catch (Exception ignored) {}
+        }
+
+        activeTrack = track;
+        activeSink = frame -> {
+            if (frame == null || renderer == null) return;
+            remoteWidth = Math.max(1, frame.getRotatedWidth());
+            remoteHeight = Math.max(1, frame.getRotatedHeight());
+            renderer.onFrame(frame);
+        };
+        track.addSink(activeSink);
+        status.setText("Live screen: " + peer);
+    }
+
+    private PointF mapToRemote(View view, float x, float y) {
+        float viewWidth = Math.max(1, view.getWidth());
+        float viewHeight = Math.max(1, view.getHeight());
+        float rw = Math.max(1, remoteWidth);
+        float rh = Math.max(1, remoteHeight);
+        float aspect = rw / rh;
+
+        float contentWidth = viewWidth;
+        float contentHeight = viewWidth / aspect;
+        if (contentHeight > viewHeight) {
+            contentHeight = viewHeight;
+            contentWidth = viewHeight * aspect;
+        }
+
+        float left = (viewWidth - contentWidth) / 2f;
+        float top = (viewHeight - contentHeight) / 2f;
+        float nx = clamp((x - left) / Math.max(1f, contentWidth), 0f, 1f);
+        float ny = clamp((y - top) / Math.max(1f, contentHeight), 0f, 1f);
+        return new PointF(nx * rw, ny * rh);
     }
 
     private boolean handleTouch(View view, MotionEvent event) {
@@ -123,33 +181,30 @@ public final class RtcViewerActivity extends Activity {
             }
 
             if (event.getActionMasked() == MotionEvent.ACTION_UP) {
-                float scaleX = 1280f / Math.max(1, view.getWidth());
-                float scaleY = 720f / Math.max(1, view.getHeight());
-
-                float remoteX = x * scaleX;
-                float remoteY = y * scaleY;
+                PointF start = mapToRemote(view, downX, downY);
+                PointF end = mapToRemote(view, x, y);
                 long duration = System.currentTimeMillis() - downAt;
 
                 JSONObject command;
                 if (Math.abs(x - downX) < 12 && Math.abs(y - downY) < 12) {
                     command = new JSONObject()
                             .put("type", "tap")
-                            .put("x", remoteX)
-                            .put("y", remoteY);
+                            .put("x", end.x)
+                            .put("y", end.y);
                 } else {
                     command = new JSONObject()
                             .put("type", "swipe")
-                            .put("x1", downX * scaleX)
-                            .put("y1", downY * scaleY)
-                            .put("x2", remoteX)
-                            .put("y2", remoteY)
+                            .put("x1", start.x)
+                            .put("y1", start.y)
+                            .put("x2", end.x)
+                            .put("y2", end.y)
                             .put("durationMs", Math.max(1, Math.min(2000, duration)));
                 }
                 service.rtc().sendControl(peerAddress, command);
                 return true;
             }
-        } catch (Exception e) {
-            status.setText("Control error: " + e.getMessage());
+        } catch (Exception error) {
+            status.setText("Control error: " + error.getMessage());
         }
         return true;
     }
@@ -159,13 +214,25 @@ public final class RtcViewerActivity extends Activity {
     }
 
     @Override protected void onDestroy() {
+        if (activeTrack != null && activeSink != null) {
+            try { activeTrack.removeSink(activeSink); } catch (Exception ignored) {}
+        }
+        activeTrack = null;
+        activeSink = null;
+
         if (renderer != null) {
             renderer.release();
             renderer = null;
         }
+        if (eglBase != null) {
+            eglBase.release();
+            eglBase = null;
+        }
         if (service != null) {
             try { unbindService(connection); } catch (Exception ignored) {}
         }
+        service = null;
+        peers = null;
         super.onDestroy();
     }
 }
