@@ -23,6 +23,8 @@ import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
 import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
+import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
+import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
 import com.jeevesh415.blutoothconnector.media.RtcPeerManager;
 
 import org.json.JSONArray;
@@ -284,7 +286,7 @@ public final class ConnectionService extends Service {
         }
     }
 
-    private void refreshCapabilities() {
+    public void refreshCapabilities() {
         MultiDeviceManager manager = peers;
         if (manager == null) return;
 
@@ -412,6 +414,16 @@ public final class ConnectionService extends Service {
                 transports.put("wifi-direct");
             }
 
+            JSONArray capabilities = new JSONArray()
+                    .put("transport.ping")
+                    .put("device.info")
+                    .put("bulk.file-transfer");
+            if (RemoteInputAccessibilityService.instance() != null
+                    && RemoteControlAuthorization.isAuthorized(
+                            this, session.address())) {
+                capabilities.put("remote.control");
+            }
+
             JSONObject payload =
                     new JSONObject()
                             .put(
@@ -425,10 +437,7 @@ public final class ConnectionService extends Service {
                                     transports)
                             .put(
                                     "capabilities",
-                                    new JSONArray()
-                                            .put("transport.ping")
-                                            .put("device.info")
-                                            .put("bulk.file-transfer"));
+                                    capabilities);
 
             JSONArray endpoints =
                     new JSONArray();
