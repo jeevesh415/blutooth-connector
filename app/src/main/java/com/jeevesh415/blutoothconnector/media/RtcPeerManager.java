@@ -62,10 +62,6 @@ public final class RtcPeerManager implements AutoCloseable {
 
     public void sendControl(String peerAddress, JSONObject command) {
         if (command == null) throw new IllegalArgumentException("command");
-        if (!isRemoteControlAuthorized(peerAddress)) {
-            throw new SecurityException("Remote control is not authorized for this peer");
-        }
-
         LowLatencyRtcEngine engine = engines.get(peerAddress);
         if (engine == null) throw new IllegalStateException("RTC session not found");
 
