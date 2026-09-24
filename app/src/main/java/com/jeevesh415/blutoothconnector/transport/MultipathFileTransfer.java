@@ -13,7 +13,6 @@ import java.net.Socket;
 import java.nio.ByteBuffer;
 import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
-import java.security.SecureRandom;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.HashSet;
@@ -33,7 +32,6 @@ public final class MultipathFileTransfer {
     private static final int MAX_ID = 64;
     private static final int CHUNK = 1024 * 1024;
     private static final int MAX_CHUNKS = 1_000_000;
-    private static final SecureRandom RANDOM = new SecureRandom();
 
     private static final class Candidate {
         final BulkEndpointInfo endpoint;
@@ -540,10 +538,8 @@ public final class MultipathFileTransfer {
                     "Invalid endpoint token");
         }
 
-        byte[] iv =
-                new byte[
-                        MultipathCrypto.GCM_IV_BYTES];
-        RANDOM.nextBytes(iv);
+        byte[] iv = MultipathCrypto.deterministicIv(
+                transferId, chunkIndex);
 
         byte[] aad =
                 MultipathCrypto.descriptor(
