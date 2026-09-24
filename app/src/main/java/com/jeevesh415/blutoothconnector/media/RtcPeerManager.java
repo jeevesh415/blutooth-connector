@@ -24,7 +24,7 @@ import java.util.concurrent.atomic.AtomicLong;
  * not grant Accessibility-backed control.
  */
 public final class RtcPeerManager implements AutoCloseable {
-    private static final int CONTROL_VERSION = 2;
+    private static final int CONTROL_VERSION = 3;
     private static final int MAX_CONTROL_BYTES = 8192;
 
     public interface Listener {
@@ -42,6 +42,8 @@ public final class RtcPeerManager implements AutoCloseable {
     private final Map<String, ControlReplayGuard> inboundControl =
             new ConcurrentHashMap<>();
     private final Map<String, AtomicLong> outboundControl =
+            new ConcurrentHashMap<>();
+    private final Map<String, String> sessionIds =
             new ConcurrentHashMap<>();
 
     public RtcPeerManager(Context context, Listener listener) {
@@ -67,10 +69,15 @@ public final class RtcPeerManager implements AutoCloseable {
 
         AtomicLong sequence = outboundControl.computeIfAbsent(
                 peerAddress, ignored -> new AtomicLong());
+        String sessionId = sessionIds.get(peerAddress);
+        if (sessionId == null) {
+            throw new IllegalStateException("RTC session has no session identifier");
+        }
         long seq = sequence.incrementAndGet();
 
         JSONObject envelope = new JSONObject()
                 .put("v", CONTROL_VERSION)
+                .put("sid", sessionId)
                 .put("seq", seq)
                 .put("command", command);
 
@@ -88,10 +95,12 @@ public final class RtcPeerManager implements AutoCloseable {
                                int fps) {
         final String peer = session.address();
         stop(peer);
-        outboundControl.computeIfAbsent(peer, ignored -> new AtomicLong());
-        inboundControl.computeIfAbsent(peer, ignored -> new ControlReplayGuard());
+        String sessionId = java.util.UUID.randomUUID().toString();
+        sessionIds.put(peer, sessionId);
+        outboundControl.put(peer, new AtomicLong());
+        inboundControl.put(peer, new ControlReplayGuard());
 
-        LowLatencyRtcEngine engine = create(session);
+        LowLatencyRtcEngine engine = create(session, sessionId);
         try {
             engine.addMicrophone();
             engine.startScreen(projectionData, width, height, fps);
@@ -109,13 +118,19 @@ public final class RtcPeerManager implements AutoCloseable {
         try {
             switch (frame.type) {
                 case Protocol.RTC_OFFER:
+                    String offerSessionId = requireSessionId(frame);
                     LowLatencyRtcEngine receiver = engines.get(peer);
                     if (receiver == null) {
-                        receiver = create(session);
+                        sessionIds.put(peer, offerSessionId);
+                        inboundControl.put(peer, new ControlReplayGuard());
+                        receiver = create(session, offerSessionId);
+                    } else if (!offerSessionId.equals(sessionIds.get(peer))) {
+                        throw new SecurityException("RTC session identifier mismatch");
                     }
                     receiver.acceptOffer(frame.payload.getString("sdp"));
                     break;
                 case Protocol.RTC_ANSWER:
+                    requireSessionMatch(peer, frame);
                     LowLatencyRtcEngine publisher = engines.get(peer);
                     if (publisher == null) {
                         throw new IllegalStateException("RTC session not found");
@@ -123,6 +138,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     publisher.acceptAnswer(frame.payload.getString("sdp"));
                     break;
                 case Protocol.RTC_ICE:
+                    requireSessionMatch(peer, frame);
                     LowLatencyRtcEngine engine = engines.get(peer);
                     if (engine == null) {
                         throw new IllegalStateException("RTC session not found");
@@ -138,6 +154,7 @@ public final class RtcPeerManager implements AutoCloseable {
                             frame.payload.toString());
                     break;
                 case Protocol.RTC_STOP:
+                    requireSessionMatch(peer, frame);
                     stop(peer);
                     break;
                 default:
@@ -160,6 +177,11 @@ public final class RtcPeerManager implements AutoCloseable {
         JSONObject envelope = new JSONObject(text);
         if (envelope.optInt("v", -1) != CONTROL_VERSION) {
             throw new SecurityException("Unsupported control envelope version");
+        }
+
+        String sid = envelope.optString("sid", "");
+        if (!sid.equals(sessionIds.get(peer))) {
+            throw new SecurityException("RTC session identifier mismatch");
         }
 
         long sequence = envelope.optLong("seq", 0);
@@ -190,7 +212,8 @@ public final class RtcPeerManager implements AutoCloseable {
                 && RemoteControlAuthorization.isAuthorized(context, peerAddress);
     }
 
-    private LowLatencyRtcEngine create(DeviceSession session) {
+    private LowLatencyRtcEngine create(
+            DeviceSession session, String sessionId) {
         final String peer = session.address();
         final LowLatencyRtcEngine engine = new LowLatencyRtcEngine(
                 context,
@@ -198,7 +221,9 @@ public final class RtcPeerManager implements AutoCloseable {
                     @Override public void onLocalOffer(String sdp) {
                         try {
                             send(session, Protocol.RTC_OFFER,
-                                    new JSONObject().put("sdp", sdp));
+                                    new JSONObject()
+                                            .put("sid", sessionId)
+                                            .put("sdp", sdp));
                         } catch (Exception error) {
                             listener.onError(peer, error);
                         }
@@ -207,7 +232,9 @@ public final class RtcPeerManager implements AutoCloseable {
                     @Override public void onLocalAnswer(String sdp) {
                         try {
                             send(session, Protocol.RTC_ANSWER,
-                                    new JSONObject().put("sdp", sdp));
+                                    new JSONObject()
+                                            .put("sid", sessionId)
+                                            .put("sdp", sdp));
                         } catch (Exception error) {
                             listener.onError(peer, error);
                         }
@@ -217,6 +244,7 @@ public final class RtcPeerManager implements AutoCloseable {
                         try {
                             send(session, Protocol.RTC_ICE,
                                     new JSONObject()
+                                            .put("sid", sessionId)
                                             .put("sdpMid", candidate.sdpMid)
                                             .put("sdpMLineIndex", candidate.sdpMLineIndex)
                                             .put("candidate", candidate.sdp));
@@ -245,7 +273,8 @@ public final class RtcPeerManager implements AutoCloseable {
                     @Override public void onState(String state) {
                         listener.onState(peer, state);
                         if ("mediaProjection:stopped".equals(state)) {
-                            send(session, Protocol.RTC_STOP, new JSONObject());
+                            send(session, Protocol.RTC_STOP,
+                                    new JSONObject().put("sid", sessionId));
                             stop(peer);
                         }
                     }
@@ -279,6 +308,9 @@ public final class RtcPeerManager implements AutoCloseable {
             engine.close();
             lastRemoteVideos.remove(peerAddress);
         }
+        sessionIds.remove(peerAddress);
+        inboundControl.remove(peerAddress);
+        outboundControl.remove(peerAddress);
     }
 
     @Override public void close() {
@@ -288,5 +320,7 @@ public final class RtcPeerManager implements AutoCloseable {
         engines.clear();
         lastRemoteVideos.clear();
         inboundControl.clear();
+        outboundControl.clear();
+        sessionIds.clear();
     }
 }
