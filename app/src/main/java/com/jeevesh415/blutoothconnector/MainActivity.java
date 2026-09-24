@@ -13,11 +13,13 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.protocol.ReliableCommandClient;
@@ -38,7 +40,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_WIFI_DIRECT = 102;
     private static final int REQUEST_FILE = 200;
     private static final int REQUEST_SCREEN_CAPTURE = 300;
-    private static final int REQUEST_RECORD_AUDIO = 301;
+    private static final int REQUEST_STREAM_PERMISSIONS = 301;
 
     private String pendingStreamPeer;
 
@@ -182,7 +184,8 @@ public final class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_BLUETOOTH_PERMISSIONS
                 && requestCode != REQUEST_LOCAL_NETWORK
-                && requestCode != REQUEST_WIFI_DIRECT) {
+                && requestCode != REQUEST_WIFI_DIRECT
+                && requestCode != REQUEST_STREAM_PERMISSIONS) {
             return;
         }
 
@@ -194,9 +197,12 @@ public final class MainActivity extends Activity {
             }
         }
 
-        if (requestCode == REQUEST_RECORD_AUDIO) {
-            if (allGranted) requestScreenCapture();
-            else status.setText("Microphone permission is required for A/V streaming.");
+        if (requestCode == REQUEST_STREAM_PERMISSIONS) {
+            if (allGranted) {
+                requestScreenCapture();
+            } else {
+                status.setText("Network and microphone permissions are required for A/V streaming.");
+            }
             return;
         }
 
@@ -324,6 +330,22 @@ public final class MainActivity extends Activity {
         remoteViewer.setOnClickListener(v ->
                 startActivity(new Intent(this, RtcViewerActivity.class)));
         root.addView(remoteViewer, new LinearLayout.LayoutParams(-1, -2));
+
+        Button authorizeRemote = new Button(this);
+        authorizeRemote.setText("Authorize first peer for remote control");
+        authorizeRemote.setOnClickListener(v -> authorizeFirstPeer());
+        root.addView(authorizeRemote, new LinearLayout.LayoutParams(-1, -2));
+
+        Button accessibilitySettings = new Button(this);
+        accessibilitySettings.setText("Open Accessibility settings");
+        accessibilitySettings.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            } catch (Exception error) {
+                updateStatus("Accessibility settings unavailable.");
+            }
+        });
+        root.addView(accessibilitySettings, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -541,11 +563,22 @@ public final class MainActivity extends Activity {
         DeviceSession first = peers.sessions().iterator().next();
         pendingStreamPeer = first.address();
 
+        ArrayList<String> missing = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 37
+                && checkSelfPermission(
+                        Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
         if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
                 != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.RECORD_AUDIO);
+        }
+
+        if (!missing.isEmpty()) {
             requestPermissions(
-                    new String[]{Manifest.permission.RECORD_AUDIO},
-                    REQUEST_RECORD_AUDIO);
+                    missing.toArray(new String[0]),
+                    REQUEST_STREAM_PERMISSIONS);
             return;
         }
         requestScreenCapture();
@@ -661,6 +694,22 @@ public final class MainActivity extends Activity {
                     if (complete.get() == total) file.delete();
                 }
             });
+        }
+    }
+
+    private void authorizeFirstPeer() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect a peer first.");
+            return;
+        }
+        DeviceSession first = peers.sessions().iterator().next();
+        try {
+            RemoteControlAuthorization.authorize(this, first.address());
+            updateStatus(
+                    "Remote control authorized for " + safeName(first.device)
+                            + ". Enable this app's Accessibility service if it is not already enabled.");
+        } catch (Exception error) {
+            status.setText("Could not authorize peer: " + safeError(error));
         }
     }
 
