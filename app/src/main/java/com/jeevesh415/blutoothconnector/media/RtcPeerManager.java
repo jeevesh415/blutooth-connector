@@ -294,8 +294,12 @@ public final class RtcPeerManager implements AutoCloseable {
                     @Override public void onState(String state) {
                         listener.onState(peer, state);
                         if ("mediaProjection:stopped".equals(state)) {
-                            send(session, Protocol.RTC_STOP,
-                                    new JSONObject().put("sid", sessionId));
+                            try {
+                                send(session, Protocol.RTC_STOP,
+                                        new JSONObject().put("sid", sessionId));
+                            } catch (org.json.JSONException error) {
+                                listener.onError(peer, error);
+                            }
                             stop(peer);
                         } else if ("peer:FAILED".equals(state)
                                 || "peer:CLOSED".equals(state)
