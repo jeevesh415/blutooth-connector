@@ -271,6 +271,7 @@ public final class WifiAwarePathManager implements AutoCloseable {
                     new WifiAwareNetworkSpecifier.Builder(session)
                             .setPmk(pmk.clone())
                             .setPort(bulkPort)
+                            .setTransportProtocol(6)
                             .build();
 
             requestNetwork(
