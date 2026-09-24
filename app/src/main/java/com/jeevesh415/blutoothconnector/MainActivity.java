@@ -189,7 +189,7 @@ public final class MainActivity extends Activity {
             return;
         }
 
-        boolean allGranted = true;
+        boolean allGranted = grantResults.length > 0;
         for (int result : grantResults) {
             if (result != PackageManager.PERMISSION_GRANTED) {
                 allGranted = false;
