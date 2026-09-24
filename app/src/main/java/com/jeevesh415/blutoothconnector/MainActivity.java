@@ -25,6 +25,7 @@ import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.protocol.ReliableCommandClient;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
+import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
 
 import org.json.JSONObject;
 
@@ -38,6 +39,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_PERMISSIONS = 100;
     private static final int REQUEST_LOCAL_NETWORK = 101;
     private static final int REQUEST_WIFI_DIRECT = 102;
+    private static final int REQUEST_WIFI_AWARE = 103;
     private static final int REQUEST_FILE = 200;
     private static final int REQUEST_SCREEN_CAPTURE = 300;
     private static final int REQUEST_STREAM_PERMISSIONS = 301;
@@ -53,6 +55,7 @@ public final class MainActivity extends Activity {
     private MultiDeviceManager peers;
     private boolean bound;
     private boolean pendingWifiDirectStart;
+    private boolean pendingWifiAwareStart;
 
     private final MultiDeviceManager.Listener uiListener = new MultiDeviceManager.Listener() {
         @Override public void onConnected(DeviceSession session) {
@@ -110,6 +113,15 @@ public final class MainActivity extends Activity {
                 pendingWifiDirectStart = false;
                 service.startWifiDirect();
                 updateStatus("Wi-Fi Direct discovery started.");
+            }
+            if (pendingWifiAwareStart && service != null) {
+                pendingWifiAwareStart = false;
+                try {
+                    service.startWifiAware();
+                    updateStatus("Wi-Fi Aware transport starting.");
+                } catch (Exception error) {
+                    updateStatus("Wi-Fi Aware could not start: " + safeError(error));
+                }
             }
             updateStatus(bound
                     ? "Connection service ready."
@@ -218,6 +230,28 @@ public final class MainActivity extends Activity {
             return;
         }
 
+        if (requestCode == REQUEST_WIFI_AWARE) {
+            if (allGranted) {
+                pendingWifiAwareStart = false;
+                if (service == null) {
+                    pendingWifiAwareStart = true;
+                    ensureConnectionService();
+                    status.setText("Connection service starting; Wi-Fi Aware will start when ready.");
+                } else {
+                    try {
+                        service.startWifiAware();
+                        updateStatus("Wi-Fi Aware transport starting.");
+                    } catch (Exception error) {
+                        updateStatus("Wi-Fi Aware could not start: " + safeError(error));
+                    }
+                }
+            } else {
+                pendingWifiAwareStart = false;
+                status.setText("Wi-Fi Aware permissions were not granted.");
+            }
+            return;
+        }
+
         if (requestCode == REQUEST_WIFI_DIRECT) {
             if (allGranted) {
                 pendingWifiDirectStart = true;
@@ -308,6 +342,11 @@ public final class MainActivity extends Activity {
         wifiDirect.setText("Start Wi-Fi Direct discovery");
         wifiDirect.setOnClickListener(v -> startWifiDirect());
         root.addView(wifiDirect, new LinearLayout.LayoutParams(-1, -2));
+
+        Button wifiAware = new Button(this);
+        wifiAware.setText("Start Wi-Fi Aware transport");
+        wifiAware.setOnClickListener(v -> startWifiAware());
+        root.addView(wifiAware, new LinearLayout.LayoutParams(-1, -2));
 
         Button connectWifiPeer = new Button(this);
         connectWifiPeer.setText("Connect first Wi-Fi Direct peer");
@@ -529,6 +568,64 @@ public final class MainActivity extends Activity {
         service.startWifiDirect();
         updateStatus(
                 "Wi-Fi Direct discovery started. Keep Wi-Fi enabled on both devices.");
+    }
+
+    private void startWifiAware() {
+        ArrayList<String> missing = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT < 31) {
+            status.setText("Secure Wi-Fi Aware transport requires Android 12 or newer.");
+            return;
+        }
+
+        if (!WifiAwarePathManager.isSupported(this)) {
+            status.setText("This device does not currently expose Wi-Fi Aware.");
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(
+                    Manifest.permission.NEARBY_WIFI_DEVICES)
+                    != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+            }
+        } else if (checkSelfPermission(
+                Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+
+        if (Build.VERSION.SDK_INT >= 37
+                && checkSelfPermission(
+                        Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
+
+        if (!missing.isEmpty()) {
+            pendingWifiAwareStart = true;
+            requestPermissions(
+                    missing.toArray(new String[0]),
+                    REQUEST_WIFI_AWARE);
+            return;
+        }
+
+        if (service == null) {
+            pendingWifiAwareStart = true;
+            ensureConnectionService();
+            status.setText(
+                    "Connection service is starting; Wi-Fi Aware will start when ready.");
+            return;
+        }
+
+        try {
+            service.startWifiAware();
+            updateStatus(
+                    "Wi-Fi Aware transport starting. Both devices must run the app.");
+        } catch (Exception error) {
+            status.setText(
+                    "Wi-Fi Aware could not start: " + safeError(error));
+        }
     }
 
     private void connectFirstWifiDirectPeer() {
