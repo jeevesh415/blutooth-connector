@@ -332,9 +332,14 @@ public final class MainActivity extends Activity {
         root.addView(remoteViewer, new LinearLayout.LayoutParams(-1, -2));
 
         Button authorizeRemote = new Button(this);
-        authorizeRemote.setText("Authorize first peer for remote control");
+        authorizeRemote.setText("Authorize first peer to control this phone");
         authorizeRemote.setOnClickListener(v -> authorizeFirstPeer());
         root.addView(authorizeRemote, new LinearLayout.LayoutParams(-1, -2));
+
+        Button revokeRemote = new Button(this);
+        revokeRemote.setText("Revoke first peer remote control");
+        revokeRemote.setOnClickListener(v -> revokeFirstPeer());
+        root.addView(revokeRemote, new LinearLayout.LayoutParams(-1, -2));
 
         Button accessibilitySettings = new Button(this);
         accessibilitySettings.setText("Open Accessibility settings");
@@ -711,6 +716,22 @@ public final class MainActivity extends Activity {
                             + ". Enable this app's Accessibility service if it is not already enabled.");
         } catch (Exception error) {
             status.setText("Could not authorize peer: " + safeError(error));
+        }
+    }
+
+    private void revokeFirstPeer() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect a peer first.");
+            return;
+        }
+        DeviceSession first = peers.sessions().iterator().next();
+        try {
+            RemoteControlAuthorization.revoke(this, first.address());
+            if (service != null) service.refreshCapabilities();
+            updateStatus(
+                    "Remote control revoked for " + safeName(first.device) + ".");
+        } catch (Exception error) {
+            status.setText("Could not revoke peer: " + safeError(error));
         }
     }
 
