@@ -705,6 +705,7 @@ public final class MainActivity extends Activity {
         DeviceSession first = peers.sessions().iterator().next();
         try {
             RemoteControlAuthorization.authorize(this, first.address());
+            if (service != null) service.refreshCapabilities();
             updateStatus(
                     "Remote control authorized for " + safeName(first.device)
                             + ". Enable this app's Accessibility service if it is not already enabled.");
