@@ -36,6 +36,14 @@ public final class MultipathCryptoTest {
                 token, tag, id, 128, 0, plaintext.length, hash,
                 0, 1, name, iv));
 
+        byte[] tamperedDescriptorTag = MultipathCrypto.authorizationTag(
+                token, id, 128, 0, plaintext.length, hash,
+                0, 1, name, iv);
+        tamperedDescriptorTag[0] ^= 0x01;
+        assertFalse(MultipathCrypto.verifyAuthorizationTag(
+                token, tamperedDescriptorTag, id, 128, 0, plaintext.length, hash,
+                0, 1, name, iv));
+
         byte[] ciphertext = MultipathCrypto.encrypt(
                 token, id, 0, plaintext, aad, iv);
         byte[] recovered = MultipathCrypto.decrypt(
