@@ -52,7 +52,7 @@
         <service
             android:name=".ConnectionService"
             android:exported="false"
-            android:foregroundServiceType="connectedDevice" />
+            android:foregroundServiceType="connectedDevice|mediaProjection|microphone" />
 
         <service
             android:name=".control.RemoteInputAccessibilityService"
