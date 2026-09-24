@@ -212,6 +212,22 @@ public final class RtcPeerManager implements AutoCloseable {
         }
     }
 
+    private String requireSessionId(Frame frame) throws Exception {
+        String sid = frame.payload.optString("sid", "");
+        if (sid.length() < 8 || sid.length() > 64) {
+            throw new SecurityException("Missing or invalid RTC session identifier");
+        }
+        return sid;
+    }
+
+    private void requireSessionMatch(String peer, Frame frame) throws Exception {
+        String sid = requireSessionId(frame);
+        String expected = sessionIds.get(peer);
+        if (expected == null || !sid.equals(expected)) {
+            throw new SecurityException("RTC session identifier mismatch");
+        }
+    }
+
     private boolean isRemoteControlAuthorized(String peerAddress) {
         return RemoteInputAccessibilityService.instance() != null
                 && RemoteControlAuthorization.isAuthorized(context, peerAddress);
