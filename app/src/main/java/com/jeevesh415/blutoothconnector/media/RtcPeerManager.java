@@ -123,6 +123,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     if (receiver == null) {
                         sessionIds.put(peer, offerSessionId);
                         inboundControl.put(peer, new ControlReplayGuard());
+                        outboundControl.put(peer, new AtomicLong());
                         receiver = create(session, offerSessionId);
                     } else if (!offerSessionId.equals(sessionIds.get(peer))) {
                         throw new SecurityException("RTC session identifier mismatch");
@@ -275,6 +276,10 @@ public final class RtcPeerManager implements AutoCloseable {
                         if ("mediaProjection:stopped".equals(state)) {
                             send(session, Protocol.RTC_STOP,
                                     new JSONObject().put("sid", sessionId));
+                            stop(peer);
+                        } else if ("peer:FAILED".equals(state)
+                                || "peer:CLOSED".equals(state)
+                                || "ice:FAILED".equals(state)) {
                             stop(peer);
                         }
                     }
