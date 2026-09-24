@@ -20,9 +20,11 @@ import com.jeevesh415.blutoothconnector.protocol.CommandRouter;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
+import com.jeevesh415.blutoothconnector.transport.BulkTransferProtocol;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
 import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
+import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
 import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
 import com.jeevesh415.blutoothconnector.media.RtcPeerManager;
@@ -48,6 +50,7 @@ public final class ConnectionService extends Service {
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
     private WifiDirectPathManager wifiDirect;
+    private WifiAwarePathManager wifiAware;
     private RtcPeerManager rtc;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
@@ -158,6 +161,55 @@ public final class ConnectionService extends Service {
     public synchronized WifiDirectPathManager wifiDirect() {
         return wifiDirect;
     }
+
+    public synchronized WifiAwarePathManager wifiAware() {
+        return wifiAware;
+    }
+
+    public synchronized void startWifiAware() {
+        if (wifiAware != null) return;
+        ensureBulkEndpoint();
+
+        if (bulk == null || bulk.port() <= 0) {
+            throw new IllegalStateException("Bulk server is not available");
+        }
+        byte[] token = bulk.authorizationToken();
+        if (token == null) {
+            throw new IllegalStateException("Bulk authorization key is not available");
+        }
+
+        try {
+            wifiAware = new WifiAwarePathManager(
+                    this,
+                    bulk.port(),
+                    token,
+                    new WifiAwarePathManager.Listener() {
+                        @Override public void onPathAvailable(
+                                android.net.Network network,
+                                String localIpv6,
+                                int peerPort) {
+                            refreshCapabilities();
+                        }
+
+                        @Override public void onPathLost() {
+                            refreshCapabilities();
+                        }
+
+                        @Override public void onError(Exception error) {}
+                    });
+            wifiAware.start();
+        } catch (Exception error) {
+            if (wifiAware != null) {
+                try { wifiAware.close(); }
+                catch (Exception ignored) {}
+            }
+            wifiAware = null;
+            throw error;
+        } finally {
+            java.util.Arrays.fill(token, (byte) 0);
+        }
+    }
+
 
     @Override public void onCreate() {
         super.onCreate();
@@ -413,6 +465,10 @@ public final class ConnectionService extends Service {
             if (wifiDirect != null) {
                 transports.put("wifi-direct");
             }
+            if (wifiAware != null
+                    && wifiAware.localIpv6() != null) {
+                transports.put("wifi-aware");
+            }
 
             JSONArray capabilities = new JSONArray()
                     .put("transport.ping")
@@ -458,6 +514,20 @@ public final class ConnectionService extends Service {
                                     .put(
                                             "transport",
                                             endpoint.transport));
+                }
+
+                if (wifiAware != null) {
+                    String localIpv6 = wifiAware.localIpv6();
+                    if (localIpv6 != null) {
+                        endpoints.put(
+                                new JSONObject()
+                                        .put("host", localIpv6)
+                                        .put("port", bulk.port())
+                                        .put("token",
+                                                BulkTransferProtocol.encodeToken(
+                                                        bulk.authorizationToken()))
+                                        .put("transport", "wifi-aware"));
+                    }
                 }
             }
 
@@ -515,6 +585,9 @@ public final class ConnectionService extends Service {
 
         if (wifiDirect != null) {
             wifiDirect.close();
+        }
+        if (wifiAware != null) {
+            wifiAware.close();
         }
         if (peers != null) {
             peers.close();
