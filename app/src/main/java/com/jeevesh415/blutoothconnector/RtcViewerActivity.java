@@ -9,6 +9,7 @@ import android.os.Bundle;
 import android.os.IBinder;
 import android.view.MotionEvent;
 import android.view.View;
+import android.widget.Button;
 import android.widget.FrameLayout;
 import android.widget.TextView;
 
@@ -57,6 +58,7 @@ public final class RtcViewerActivity extends Activity {
             }
             service.rtc().setListener(new RtcPeerManager.Listener() {
                 @Override public void onRemoteVideo(String peer, VideoTrack track) {
+                    if (peerAddress == null) peerAddress = peer;
                     if (!peer.equals(peerAddress) || renderer == null) return;
                     runOnUiThread(() -> attachTrack(track, peer));
                 }
@@ -105,6 +107,15 @@ public final class RtcViewerActivity extends Activity {
         status.setTextSize(14);
         status.setPadding(20, 20, 20, 20);
         root.addView(status, new FrameLayout.LayoutParams(-1, -2));
+
+        Button stop = new Button(this);
+        stop.setText("Stop remote stream");
+        FrameLayout.LayoutParams stopParams =
+                new FrameLayout.LayoutParams(-2, -2);
+        stopParams.topMargin = 64;
+        stopParams.leftMargin = 20;
+        root.addView(stop, stopParams);
+        stop.setOnClickListener(v -> stopRemoteStream());
 
         setContentView(root);
 
@@ -209,11 +220,30 @@ public final class RtcViewerActivity extends Activity {
         return true;
     }
 
+    private void stopRemoteStream() {
+        if (service == null || peers == null || peerAddress == null) {
+            if (status != null) status.setText("No active remote stream.");
+            return;
+        }
+        try {
+            DeviceSession session = peers.session(peerAddress);
+            if (session == null) {
+                status.setText("Peer is no longer connected.");
+                return;
+            }
+            service.rtc().requestStop(session);
+            status.setText("Remote stream stopped.");
+        } catch (Exception error) {
+            status.setText("Could not stop stream: " + error.getMessage());
+        }
+    }
+
     private static float clamp(float v, float min, float max) {
         return Math.max(min, Math.min(max, v));
     }
 
     @Override protected void onDestroy() {
+        stopRemoteStream();
         if (activeTrack != null && activeSink != null) {
             try { activeTrack.removeSink(activeSink); } catch (Exception ignored) {}
         }
