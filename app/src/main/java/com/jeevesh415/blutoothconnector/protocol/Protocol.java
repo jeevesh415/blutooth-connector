@@ -10,6 +10,15 @@ public final class Protocol {
 
     public static final int VERSION = 1;
     public static final int MAX_FRAME_BYTES = 64 * 1024;
+
+    // Negotiated protocol features. Keep these additive so older peers can
+    // continue using the legacy capability-id array.
+    public static final String FEATURE_CAPABILITY_MANIFEST_V1 =
+            "capability-manifest-v1";
+    public static final String FEATURE_MULTIPATH_PATH_ID_V1 =
+            "multipath-path-id-v1";
+    public static final String FEATURE_RTC_CONTROL_V3 =
+            "rtc-control-v3";
     public static final UUID RFCOMM_UUID =
             UUID.fromString("7f6c4d32-6a3a-4d61-9d89-0b3b7b9e2a41");
 
