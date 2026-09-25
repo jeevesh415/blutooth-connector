@@ -40,8 +40,9 @@ import java.util.concurrent.atomic.AtomicInteger;
  * Network object.
  *
  * The existing BCL3 AES-GCM/token layer remains the application-level
- * authorization boundary; the same 32-byte bulk token is used as the Aware
- * PMK on Android 11+.
+ * authorization boundary. Wi-Fi Aware derives a symmetric PMK from both
+ * peers' authenticated BCL3 bulk tokens; the raw tokens are not advertised
+ * in Aware discovery metadata.
  */
 public final class WifiAwarePathManager implements AutoCloseable {
     public static final String SERVICE_NAME = "bcl-connector";
