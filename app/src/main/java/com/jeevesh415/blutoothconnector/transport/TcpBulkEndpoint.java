@@ -143,6 +143,15 @@ public final class TcpBulkEndpoint implements AutoCloseable {
         }
     }
 
+    /**
+     * Returns a copy of the application bulk-transfer secret used to
+     * authenticate/encrypt BCL3 payloads. The caller must not retain it
+     * longer than required.
+     */
+    public synchronized byte[] authorizationToken() {
+        return token == null ? null : token.clone();
+    }
+
     public synchronized int port() {
         return server == null
                 ? -1

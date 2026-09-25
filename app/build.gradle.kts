@@ -10,8 +10,8 @@ android {
         applicationId = "com.jeevesh415.blutoothconnector"
         minSdk = 26
         targetSdk = 37
-        versionCode = 4
-        versionName = "0.4.0"
+        versionCode = 6
+        versionName = "0.6.0"
     }
 
     compileOptions {
@@ -25,5 +25,6 @@ android {
 }
 
 dependencies {
+    implementation("io.github.webrtc-sdk:android:150.7871.01")
     testImplementation("junit:junit:4.13.2")
 }

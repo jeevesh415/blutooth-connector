@@ -1,0 +1,3 @@
+<resources>
+    <string name="accessibility_description">Allows the user to control this phone from an explicitly authorized paired device through touch gestures and basic navigation.</string>
+</resources>

@@ -3,6 +3,9 @@ package com.jeevesh415.blutoothconnector.transport;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothSocket;
 
+import com.jeevesh415.blutoothconnector.security.SessionAuthenticator;
+
+import java.security.SecureRandom;
 import java.util.List;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.atomic.AtomicLong;
@@ -20,6 +23,15 @@ public final class DeviceSession {
 
     private final AtomicLong txSequence = new AtomicLong(0);
     public final Object commandLock = new Object();
+
+    public final byte[] localAuthNonce =
+            SessionAuthenticator.newNonce(new SecureRandom());
+    public volatile byte[] remoteAuthNonce;
+    public volatile byte[] remoteIdentityKey;
+    public volatile boolean localAuthSent;
+    public volatile boolean remoteAuthVerified;
+    public volatile boolean authOkReceived;
+    public volatile boolean authenticated;
 
     public volatile State state = State.CONNECTED;
     public volatile long connectedAtMs;

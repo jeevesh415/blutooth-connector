@@ -1,5 +1,9 @@
 name: Android CI
 
+concurrency:
+  group: android-ci-${{ github.workflow }}
+  cancel-in-progress: true
+
 on:
   push:
     branches: [ main ]
@@ -36,5 +40,11 @@ jobs:
         with:
           gradle-version: '9.6.0'
 
-      - name: Unit tests and debug build
-        run: gradle --no-daemon testDebugUnitTest assembleDebug
+      - name: Unit tests
+        run: gradle --no-daemon testDebugUnitTest
+
+      - name: Android lint
+        run: gradle --no-daemon lintDebug
+
+      - name: Debug build
+        run: gradle --no-daemon assembleDebug

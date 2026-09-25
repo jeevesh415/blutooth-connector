@@ -8,6 +8,7 @@ import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
 import java.nio.charset.StandardCharsets;
 import java.security.MessageDigest;
+import java.util.Arrays;
 
 public final class MultipathCrypto {
     public static final int TOKEN_BYTES = 32;
@@ -64,6 +65,10 @@ public final class MultipathCrypto {
             byte[] aad,
             byte[] iv) throws Exception {
         validateIv(iv);
+        validateChunkIndex(chunkIndex);
+        if (!MessageDigest.isEqual(iv, deterministicIv(transferId, chunkIndex))) {
+            throw new IllegalArgumentException("IV is not bound to transfer/chunk");
+        }
         if (plaintext == null) throw new IllegalArgumentException("plaintext");
 
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -83,6 +88,10 @@ public final class MultipathCrypto {
             byte[] aad,
             byte[] iv) throws Exception {
         validateIv(iv);
+        validateChunkIndex(chunkIndex);
+        if (!MessageDigest.isEqual(iv, deterministicIv(transferId, chunkIndex))) {
+            throw new IllegalArgumentException("IV is not bound to transfer/chunk");
+        }
         if (ciphertext == null) throw new IllegalArgumentException("ciphertext");
 
         Cipher cipher = Cipher.getInstance("AES/GCM/NoPadding");
@@ -131,6 +140,32 @@ public final class MultipathCrypto {
         out.write(iv);
         out.flush();
         return bytes.toByteArray();
+    }
+
+    /**
+     * Derives a unique GCM IV from the transfer identity and chunk index.
+     * The transfer id is generated with UUID.randomUUID(), while the chunk
+     * index makes retries of the same chunk reuse the same nonce safely.
+     */
+    public static byte[] deterministicIv(String transferId, int chunkIndex) throws Exception {
+        if (transferId == null || transferId.isEmpty()) {
+            throw new IllegalArgumentException("transferId");
+        }
+        validateChunkIndex(chunkIndex);
+        MessageDigest digest = MessageDigest.getInstance("SHA-256");
+        digest.update("BCL3-GCM-IV".getBytes(StandardCharsets.US_ASCII));
+        digest.update((byte) 0);
+        digest.update(transferId.getBytes(StandardCharsets.UTF_8));
+        digest.update((byte) 0);
+        digest.update((byte) (chunkIndex >>> 24));
+        digest.update((byte) (chunkIndex >>> 16));
+        digest.update((byte) (chunkIndex >>> 8));
+        digest.update((byte) chunkIndex);
+        return Arrays.copyOf(digest.digest(), GCM_IV_BYTES);
+    }
+
+    private static void validateChunkIndex(int chunkIndex) {
+        if (chunkIndex < 0) throw new IllegalArgumentException("chunkIndex");
     }
 
     private static byte[] key(byte[] token, String transferId) throws Exception {

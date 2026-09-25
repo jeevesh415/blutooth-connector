@@ -13,16 +13,19 @@ import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
+import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.protocol.ReliableCommandClient;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
+import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
 
 import org.json.JSONObject;
 
@@ -36,7 +39,12 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_BLUETOOTH_PERMISSIONS = 100;
     private static final int REQUEST_LOCAL_NETWORK = 101;
     private static final int REQUEST_WIFI_DIRECT = 102;
+    private static final int REQUEST_WIFI_AWARE = 103;
     private static final int REQUEST_FILE = 200;
+    private static final int REQUEST_SCREEN_CAPTURE = 300;
+    private static final int REQUEST_STREAM_PERMISSIONS = 301;
+
+    private String pendingStreamPeer;
 
     private final ArrayList<BluetoothDevice> devices = new ArrayList<>();
     private final Map<String, ReliableCommandClient> commandClients =
@@ -47,6 +55,7 @@ public final class MainActivity extends Activity {
     private MultiDeviceManager peers;
     private boolean bound;
     private boolean pendingWifiDirectStart;
+    private boolean pendingWifiAwareStart;
 
     private final MultiDeviceManager.Listener uiListener = new MultiDeviceManager.Listener() {
         @Override public void onConnected(DeviceSession session) {
@@ -104,6 +113,15 @@ public final class MainActivity extends Activity {
                 pendingWifiDirectStart = false;
                 service.startWifiDirect();
                 updateStatus("Wi-Fi Direct discovery started.");
+            }
+            if (pendingWifiAwareStart && service != null) {
+                pendingWifiAwareStart = false;
+                try {
+                    service.startWifiAware();
+                    updateStatus("Wi-Fi Aware transport starting.");
+                } catch (Exception error) {
+                    updateStatus("Wi-Fi Aware could not start: " + safeError(error));
+                }
             }
             updateStatus(bound
                     ? "Connection service ready."
@@ -178,16 +196,26 @@ public final class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQUEST_BLUETOOTH_PERMISSIONS
                 && requestCode != REQUEST_LOCAL_NETWORK
-                && requestCode != REQUEST_WIFI_DIRECT) {
+                && requestCode != REQUEST_WIFI_DIRECT
+                && requestCode != REQUEST_STREAM_PERMISSIONS) {
             return;
         }
 
-        boolean allGranted = true;
+        boolean allGranted = grantResults.length > 0;
         for (int result : grantResults) {
             if (result != PackageManager.PERMISSION_GRANTED) {
                 allGranted = false;
                 break;
             }
+        }
+
+        if (requestCode == REQUEST_STREAM_PERMISSIONS) {
+            if (allGranted) {
+                requestScreenCapture();
+            } else {
+                status.setText("Network and microphone permissions are required for A/V streaming.");
+            }
+            return;
         }
 
         if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
@@ -198,6 +226,28 @@ public final class MainActivity extends Activity {
             } else {
                 status.setText(
                         "Bluetooth permissions were not granted.");
+            }
+            return;
+        }
+
+        if (requestCode == REQUEST_WIFI_AWARE) {
+            if (allGranted) {
+                pendingWifiAwareStart = false;
+                if (service == null) {
+                    pendingWifiAwareStart = true;
+                    ensureConnectionService();
+                    status.setText("Connection service starting; Wi-Fi Aware will start when ready.");
+                } else {
+                    try {
+                        service.startWifiAware();
+                        updateStatus("Wi-Fi Aware transport starting.");
+                    } catch (Exception error) {
+                        updateStatus("Wi-Fi Aware could not start: " + safeError(error));
+                    }
+                }
+            } else {
+                pendingWifiAwareStart = false;
+                status.setText("Wi-Fi Aware permissions were not granted.");
             }
             return;
         }
@@ -293,6 +343,11 @@ public final class MainActivity extends Activity {
         wifiDirect.setOnClickListener(v -> startWifiDirect());
         root.addView(wifiDirect, new LinearLayout.LayoutParams(-1, -2));
 
+        Button wifiAware = new Button(this);
+        wifiAware.setText("Start Wi-Fi Aware transport");
+        wifiAware.setOnClickListener(v -> startWifiAware());
+        root.addView(wifiAware, new LinearLayout.LayoutParams(-1, -2));
+
         Button connectWifiPeer = new Button(this);
         connectWifiPeer.setText("Connect first Wi-Fi Direct peer");
         connectWifiPeer.setOnClickListener(v -> connectFirstWifiDirectPeer());
@@ -303,6 +358,38 @@ public final class MainActivity extends Activity {
         webDashboard.setOnClickListener(v ->
                 startActivity(new Intent(this, WebDashboardActivity.class)));
         root.addView(webDashboard, new LinearLayout.LayoutParams(-1, -2));
+
+        Button streamScreen = new Button(this);
+        streamScreen.setText("Stream screen + microphone to first peer");
+        streamScreen.setOnClickListener(v -> startScreenStream());
+        root.addView(streamScreen, new LinearLayout.LayoutParams(-1, -2));
+
+        Button remoteViewer = new Button(this);
+        remoteViewer.setText("Open remote screen + control");
+        remoteViewer.setOnClickListener(v ->
+                startActivity(new Intent(this, RtcViewerActivity.class)));
+        root.addView(remoteViewer, new LinearLayout.LayoutParams(-1, -2));
+
+        Button authorizeRemote = new Button(this);
+        authorizeRemote.setText("Authorize first peer to control this phone");
+        authorizeRemote.setOnClickListener(v -> authorizeFirstPeer());
+        root.addView(authorizeRemote, new LinearLayout.LayoutParams(-1, -2));
+
+        Button revokeRemote = new Button(this);
+        revokeRemote.setText("Revoke first peer remote control");
+        revokeRemote.setOnClickListener(v -> revokeFirstPeer());
+        root.addView(revokeRemote, new LinearLayout.LayoutParams(-1, -2));
+
+        Button accessibilitySettings = new Button(this);
+        accessibilitySettings.setText("Open Accessibility settings");
+        accessibilitySettings.setOnClickListener(v -> {
+            try {
+                startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+            } catch (Exception error) {
+                updateStatus("Accessibility settings unavailable.");
+            }
+        });
+        root.addView(accessibilitySettings, new LinearLayout.LayoutParams(-1, -2));
 
         setContentView(root);
     }
@@ -483,6 +570,64 @@ public final class MainActivity extends Activity {
                 "Wi-Fi Direct discovery started. Keep Wi-Fi enabled on both devices.");
     }
 
+    private void startWifiAware() {
+        ArrayList<String> missing = new ArrayList<>();
+
+        if (Build.VERSION.SDK_INT < 31) {
+            status.setText("Secure Wi-Fi Aware transport requires Android 12 or newer.");
+            return;
+        }
+
+        if (!WifiAwarePathManager.isSupported(this)) {
+            status.setText("This device does not currently expose Wi-Fi Aware.");
+            return;
+        }
+
+        if (Build.VERSION.SDK_INT >= 33) {
+            if (checkSelfPermission(
+                    Manifest.permission.NEARBY_WIFI_DEVICES)
+                    != PackageManager.PERMISSION_GRANTED) {
+                missing.add(Manifest.permission.NEARBY_WIFI_DEVICES);
+            }
+        } else if (checkSelfPermission(
+                Manifest.permission.ACCESS_FINE_LOCATION)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_FINE_LOCATION);
+        }
+
+        if (Build.VERSION.SDK_INT >= 37
+                && checkSelfPermission(
+                        Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
+
+        if (!missing.isEmpty()) {
+            pendingWifiAwareStart = true;
+            requestPermissions(
+                    missing.toArray(new String[0]),
+                    REQUEST_WIFI_AWARE);
+            return;
+        }
+
+        if (service == null) {
+            pendingWifiAwareStart = true;
+            ensureConnectionService();
+            status.setText(
+                    "Connection service is starting; Wi-Fi Aware will start when ready.");
+            return;
+        }
+
+        try {
+            service.startWifiAware();
+            updateStatus(
+                    "Wi-Fi Aware transport starting. Both devices must run the app.");
+        } catch (Exception error) {
+            status.setText(
+                    "Wi-Fi Aware could not start: " + safeError(error));
+        }
+    }
+
     private void connectFirstWifiDirectPeer() {
         if (service == null || service.wifiDirect() == null) {
             status.setText(
@@ -512,6 +657,49 @@ public final class MainActivity extends Activity {
                 : device.deviceName;
     }
 
+    private void startScreenStream() {
+        if (service == null || peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect at least one peer first.");
+            return;
+        }
+        DeviceSession first = peers.sessions().iterator().next();
+        pendingStreamPeer = first.address();
+
+        ArrayList<String> missing = new ArrayList<>();
+        if (Build.VERSION.SDK_INT >= 37
+                && checkSelfPermission(
+                        Manifest.permission.ACCESS_LOCAL_NETWORK)
+                        != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.ACCESS_LOCAL_NETWORK);
+        }
+        if (checkSelfPermission(Manifest.permission.RECORD_AUDIO)
+                != PackageManager.PERMISSION_GRANTED) {
+            missing.add(Manifest.permission.RECORD_AUDIO);
+        }
+
+        if (!missing.isEmpty()) {
+            requestPermissions(
+                    missing.toArray(new String[0]),
+                    REQUEST_STREAM_PERMISSIONS);
+            return;
+        }
+        requestScreenCapture();
+    }
+
+    private void requestScreenCapture() {
+        android.media.projection.MediaProjectionManager manager =
+                (android.media.projection.MediaProjectionManager)
+                        getSystemService(MEDIA_PROJECTION_SERVICE);
+        if (manager == null) {
+            status.setText("MediaProjection is unavailable.");
+            return;
+        }
+        startActivityForResult(
+                manager.createScreenCaptureIntent(),
+                REQUEST_SCREEN_CAPTURE);
+        status.setText("Approve Android's screen-capture prompt.");
+    }
+
     private void openFilePicker() {
         Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         intent.addCategory(Intent.CATEGORY_OPENABLE);
@@ -521,6 +709,23 @@ public final class MainActivity extends Activity {
 
     @Override protected void onActivityResult(int requestCode, int resultCode, Intent data) {
         super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_SCREEN_CAPTURE) {
+            if (resultCode != RESULT_OK || data == null || pendingStreamPeer == null) {
+                status.setText("Screen capture was not granted.");
+                return;
+            }
+            try {
+                service.startScreenShare(
+                        pendingStreamPeer,
+                        resultCode,
+                        data);
+                status.setText("Screen + microphone streaming started.");
+            } catch (Exception error) {
+                status.setText("Could not start stream: " + safeError(error));
+            }
+            return;
+        }
+
         if (requestCode != REQUEST_FILE || resultCode != RESULT_OK || data == null
                 || data.getData() == null) {
             return;
@@ -591,6 +796,39 @@ public final class MainActivity extends Activity {
                     if (complete.get() == total) file.delete();
                 }
             });
+        }
+    }
+
+    private void authorizeFirstPeer() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect a peer first.");
+            return;
+        }
+        DeviceSession first = peers.sessions().iterator().next();
+        try {
+            RemoteControlAuthorization.authorize(this, first.address());
+            if (service != null) service.refreshCapabilities();
+            updateStatus(
+                    "Remote control authorized for " + safeName(first.device)
+                            + ". Enable this app's Accessibility service if it is not already enabled.");
+        } catch (Exception error) {
+            status.setText("Could not authorize peer: " + safeError(error));
+        }
+    }
+
+    private void revokeFirstPeer() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect a peer first.");
+            return;
+        }
+        DeviceSession first = peers.sessions().iterator().next();
+        try {
+            RemoteControlAuthorization.revoke(this, first.address());
+            if (service != null) service.refreshCapabilities();
+            updateStatus(
+                    "Remote control revoked for " + safeName(first.device) + ".");
+        } catch (Exception error) {
+            status.setText("Could not revoke peer: " + safeError(error));
         }
     }
 

@@ -79,7 +79,7 @@ public final class MultipathReceiver {
             throw new java.io.IOException("Cannot create transfer directory");
         }
 
-        cleanupStaleStates();
+        cleanupStaleStates(directory);
 
         if (in.readInt() != MAGIC) {
             throw new java.io.IOException("Bad BCL3 magic");
@@ -239,7 +239,9 @@ public final class MultipathReceiver {
         }
 
         String stateKey =
-                transferId + ":" + BulkTransferProtocol.hex(hash);
+                directory.getCanonicalPath()
+                        + "|" + transferId
+                        + ":" + BulkTransferProtocol.hex(hash);
         State state = getOrCreateState(
                 directory,
                 stateKey,
@@ -517,7 +519,7 @@ public final class MultipathReceiver {
         out.flush();
     }
 
-    private static void cleanupStaleStates() {
+    private static void cleanupStaleStates(File directory) {
         long cutoff =
                 System.currentTimeMillis()
                         - 10 * 60 * 1000L;
@@ -531,14 +533,30 @@ public final class MultipathReceiver {
                     STATES.size() > MAX_STORED_TRANSFERS;
 
             if (expired || overLimit) {
-                if (STATES.remove(
-                        entry.getKey(), state)) {
-                    if (state.part.exists()) {
-                        state.part.delete();
-                    }
-                    deleteMetadata(state);
+                if (STATES.remove(entry.getKey(), state)) {
+                    deletePartialState(state);
                 }
             }
         }
+
+        File[] metadataFiles = directory.listFiles(
+                (dir, name) -> name.endsWith(".meta"));
+        if (metadataFiles == null) return;
+
+        for (File metadata : metadataFiles) {
+            if (metadata.lastModified() >= cutoff) continue;
+            File part = new File(
+                    metadata.getPath()
+                            .substring(0, metadata.getPath().length() - 5));
+            try { metadata.delete(); } catch (Exception ignored) {}
+            try { part.delete(); } catch (Exception ignored) {}
+        }
+    }
+
+    private static void deletePartialState(State state) {
+        try {
+            if (state.part.exists()) state.part.delete();
+        } catch (Exception ignored) {}
+        deleteMetadata(state);
     }
 }

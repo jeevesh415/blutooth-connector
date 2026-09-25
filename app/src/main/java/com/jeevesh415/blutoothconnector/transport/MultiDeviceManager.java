@@ -8,6 +8,7 @@ import android.content.Context;
 
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
+import com.jeevesh415.blutoothconnector.security.SessionAuthenticator;
 
 import org.json.JSONObject;
 
@@ -298,6 +299,16 @@ public final class MultiDeviceManager implements AutoCloseable {
                     .put("maxPeers", MAX_CLASSIC_PEERS)
                     .put("device", safeName(device));
 
+            if (bulkContext != null) {
+                hello.put(
+                        "identityKey",
+                        SessionAuthenticator.publicKeyBase64(bulkContext));
+                hello.put(
+                        "authNonce",
+                        java.util.Base64.getEncoder()
+                                .encodeToString(session.localAuthNonce));
+            }
+
             holder[0].send(new Frame(
                     Protocol.VERSION,
                     Protocol.HELLO,
@@ -326,6 +337,8 @@ public final class MultiDeviceManager implements AutoCloseable {
                         new java.io.IOException("Peer heartbeat timeout"));
                 continue;
             }
+
+            if (!session.authenticated) continue;
 
             try {
                 long t0 = System.nanoTime();

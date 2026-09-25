@@ -19,17 +19,24 @@ import com.jeevesh415.blutoothconnector.capability.DeviceInfoCapability;
 import com.jeevesh415.blutoothconnector.protocol.CommandRouter;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
+import com.jeevesh415.blutoothconnector.security.SessionAuthenticator;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
+import com.jeevesh415.blutoothconnector.transport.BulkTransferProtocol;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
 import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
+import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
+import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
+import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
+import com.jeevesh415.blutoothconnector.media.RtcPeerManager;
 
 import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.nio.charset.StandardCharsets;
+import java.util.Arrays;
 import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
 
 public final class ConnectionService extends Service {
     private static final String CHANNEL = "connection";
@@ -45,6 +52,8 @@ public final class ConnectionService extends Service {
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
     private WifiDirectPathManager wifiDirect;
+    private WifiAwarePathManager wifiAware;
+    private RtcPeerManager rtc;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
 
@@ -60,6 +69,58 @@ public final class ConnectionService extends Service {
 
     public MultiDeviceManager peers() {
         return peers;
+    }
+
+    public synchronized RtcPeerManager rtc() {
+        if (rtc == null) {
+            rtc = new RtcPeerManager(
+                    this,
+                    new RtcPeerManager.Listener() {
+                        @Override public void onRemoteVideo(
+                                String peerAddress,
+                                org.webrtc.VideoTrack track) {}
+
+                        @Override public void onState(
+                                String peerAddress,
+                                String state) {}
+
+                        @Override public void onError(
+                                String peerAddress,
+                                Exception error) {}
+                    });
+        }
+        return rtc;
+    }
+
+    public synchronized void startScreenShare(
+            String peerAddress,
+            int resultCode,
+            Intent projectionData) {
+        if (peers == null) {
+            throw new IllegalStateException("Connection service not ready");
+        }
+        if (projectionData == null) {
+            throw new IllegalArgumentException("projectionData");
+        }
+
+        DeviceSession target = peers.session(peerAddress);
+        if (target == null) {
+            throw new IllegalArgumentException("Peer is not connected");
+        }
+        if (!target.authenticated) {
+            throw new SecurityException("Peer session is not authenticated");
+        }
+
+        if (android.os.Build.VERSION.SDK_INT >= 29) {
+            startForeground(
+                    NOTIFICATION_ID,
+                    notification(),
+                    ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+        }
+
+        rtc().startPublisher(target, projectionData, 1280, 720, 30);
     }
 
     public synchronized void startWifiDirect() {
@@ -101,6 +162,55 @@ public final class ConnectionService extends Service {
         return wifiDirect;
     }
 
+    public synchronized WifiAwarePathManager wifiAware() {
+        return wifiAware;
+    }
+
+    public synchronized void startWifiAware() {
+        if (wifiAware != null) return;
+        ensureBulkEndpoint();
+
+        if (bulk == null || bulk.port() <= 0) {
+            throw new IllegalStateException("Bulk server is not available");
+        }
+        byte[] token = bulk.authorizationToken();
+        if (token == null) {
+            throw new IllegalStateException("Bulk authorization key is not available");
+        }
+
+        try {
+            wifiAware = new WifiAwarePathManager(
+                    this,
+                    bulk.port(),
+                    token,
+                    new WifiAwarePathManager.Listener() {
+                        @Override public void onPathAvailable(
+                                android.net.Network network,
+                                String localIpv6,
+                                int peerPort) {
+                            refreshCapabilities();
+                        }
+
+                        @Override public void onPathLost() {
+                            refreshCapabilities();
+                        }
+
+                        @Override public void onError(Exception error) {}
+                    });
+            wifiAware.start();
+        } catch (Exception error) {
+            if (wifiAware != null) {
+                try { wifiAware.close(); }
+                catch (Exception ignored) {}
+            }
+            wifiAware = null;
+            throw new IllegalStateException(
+                    "Could not start Wi-Fi Aware transport", error);
+        } finally {
+            Arrays.fill(token, (byte) 0);
+        }
+    }
+
     @Override public void onCreate() {
         super.onCreate();
         createNotificationChannel();
@@ -131,7 +241,8 @@ public final class ConnectionService extends Service {
                 new MultiDeviceManager.Listener() {
                     @Override public void onConnected(
                             DeviceSession session) {
-                        sendCapabilities(session);
+                        // HELLO carries the identity key and nonce. Capabilities
+                        // are withheld until the signed handshake completes.
                     }
 
                     @Override public void onFrame(
@@ -142,7 +253,11 @@ public final class ConnectionService extends Service {
 
                     @Override public void onDisconnected(
                             DeviceSession session,
-                            Exception error) {}
+                            Exception error) {
+                        if (rtc != null) {
+                            rtc.stop(session.address());
+                        }
+                    }
 
                     @Override public void onConnectError(
                             BluetoothDevice device,
@@ -228,13 +343,15 @@ public final class ConnectionService extends Service {
         }
     }
 
-    private void refreshCapabilities() {
+    public void refreshCapabilities() {
         MultiDeviceManager manager = peers;
         if (manager == null) return;
 
         for (DeviceSession session :
                 manager.sessions()) {
-            sendCapabilities(session);
+            if (session.authenticated) {
+                sendCapabilities(session);
+            }
         }
     }
 
@@ -243,7 +360,26 @@ public final class ConnectionService extends Service {
             Frame frame) {
         try {
             if (Protocol.HELLO.equals(frame.type)) {
-                sendCapabilities(session);
+                handleHello(session, frame);
+                return;
+            }
+
+            if (Protocol.AUTH.equals(frame.type)) {
+                handleAuth(session, frame);
+                return;
+            }
+
+            if (Protocol.AUTH_OK.equals(frame.type)) {
+                handleAuthOk(session, frame);
+                return;
+            }
+
+            if (!session.authenticated) {
+                throw new SecurityException("Session is not authenticated");
+            }
+
+            if (Protocol.CAPABILITIES.equals(frame.type)) {
+                syncAwarePeerKey(session, frame);
                 return;
             }
 
@@ -264,6 +400,15 @@ public final class ConnectionService extends Service {
                 return;
             }
 
+            if (Protocol.RTC_OFFER.equals(frame.type)
+                    || Protocol.RTC_ANSWER.equals(frame.type)
+                    || Protocol.RTC_ICE.equals(frame.type)
+                    || Protocol.RTC_CONTROL.equals(frame.type)
+                    || Protocol.RTC_STOP.equals(frame.type)) {
+                rtc().handle(session, frame);
+                return;
+            }
+
             if (Protocol.COMMAND.equals(frame.type)) {
                 commandExecutor.execute(
                         () -> handleCommand(
@@ -272,6 +417,207 @@ public final class ConnectionService extends Service {
         } catch (Exception error) {
             sendProtocolError(
                     session, frame, error);
+        }
+    }
+
+    private void handleHello(
+            DeviceSession session,
+            Frame frame) throws Exception {
+        String encodedKey =
+                frame.payload.optString("identityKey", "");
+        String encodedNonce =
+                frame.payload.optString("authNonce", "");
+
+        if (encodedKey.isEmpty()
+                || encodedNonce.isEmpty()) {
+            throw new SecurityException(
+                    "Peer did not present application identity");
+        }
+
+        byte[] remoteKey =
+                java.util.Base64.getDecoder().decode(encodedKey);
+        byte[] remoteNonce =
+                java.util.Base64.getDecoder().decode(encodedNonce);
+
+        if (remoteKey.length == 0
+                || remoteKey.length > SessionAuthenticator.MAX_PUBLIC_KEY_BYTES
+                || remoteNonce.length != SessionAuthenticator.NONCE_BYTES) {
+            throw new SecurityException("Invalid peer identity material");
+        }
+
+        if (session.remoteIdentityKey != null
+                || session.remoteAuthNonce != null
+                || session.localAuthSent) {
+            if (!java.security.MessageDigest.isEqual(
+                        session.remoteIdentityKey, remoteKey)
+                    || !java.security.MessageDigest.isEqual(
+                        session.remoteAuthNonce, remoteNonce)) {
+                throw new SecurityException(
+                        "Peer attempted to renegotiate an authenticated identity");
+            }
+            if (session.authenticated) {
+                return;
+            }
+        }
+
+        byte[] pinned =
+                SessionAuthenticator.pinnedPeer(
+                        this,
+                        session.address());
+        if (pinned != null && !java.security.MessageDigest.isEqual(
+                pinned, remoteKey)) {
+            throw new SecurityException(
+                    "Peer application identity changed");
+        }
+
+        session.remoteIdentityKey = remoteKey;
+        session.remoteAuthNonce = remoteNonce;
+        sendAuth(session);
+    }
+
+    private void sendAuth(DeviceSession session) throws Exception {
+        byte[] remoteKey = session.remoteIdentityKey;
+        byte[] remoteNonce = session.remoteAuthNonce;
+        if (remoteKey == null || remoteNonce == null) return;
+
+        byte[] localKey = SessionAuthenticator.publicKey(this);
+        byte[] transcript = SessionAuthenticator.transcript(
+                localKey,
+                session.localAuthNonce,
+                remoteKey,
+                remoteNonce);
+
+        byte[] signature =
+                SessionAuthenticator.sign(this, transcript);
+
+        session.connection.send(
+                new Frame(
+                        Protocol.VERSION,
+                        Protocol.AUTH,
+                        session.nextSequence(),
+                        System.currentTimeMillis(),
+                        new JSONObject()
+                                .put(
+                                        "identityKey",
+                                        java.util.Base64.getEncoder()
+                                                .encodeToString(localKey))
+                                .put(
+                                        "signature",
+                                        java.util.Base64.getEncoder()
+                                                .encodeToString(signature))));
+        session.localAuthSent = true;
+        session.lastTxMs = System.currentTimeMillis();
+        Arrays.fill(localKey, (byte) 0);
+        Arrays.fill(transcript, (byte) 0);
+        Arrays.fill(signature, (byte) 0);
+    }
+
+    private void handleAuth(
+            DeviceSession session,
+            Frame frame) throws Exception {
+        if (session.remoteIdentityKey == null
+                || session.remoteAuthNonce == null) {
+            throw new SecurityException("AUTH before HELLO");
+        }
+
+        byte[] presentedKey =
+                java.util.Base64.getDecoder().decode(
+                        frame.payload.optString("identityKey", ""));
+        byte[] signature =
+                java.util.Base64.getDecoder().decode(
+                        frame.payload.optString("signature", ""));
+
+        if (!java.security.MessageDigest.isEqual(
+                presentedKey, session.remoteIdentityKey)) {
+            throw new SecurityException(
+                    "AUTH identity does not match HELLO");
+        }
+
+        byte[] localKey = SessionAuthenticator.publicKey(this);
+        byte[] transcript = SessionAuthenticator.transcript(
+                localKey,
+                session.localAuthNonce,
+                session.remoteIdentityKey,
+                session.remoteAuthNonce);
+
+        if (!SessionAuthenticator.verify(
+                presentedKey,
+                transcript,
+                signature)) {
+            throw new SecurityException("Peer identity signature invalid");
+        }
+
+        SessionAuthenticator.pinPeer(
+                this,
+                session.address(),
+                presentedKey);
+        session.remoteAuthVerified = true;
+
+        session.connection.send(
+                new Frame(
+                        Protocol.VERSION,
+                        Protocol.AUTH_OK,
+                        session.nextSequence(),
+                        System.currentTimeMillis(),
+                        new JSONObject()
+                                .put(
+                                        "fingerprint",
+                                        SessionAuthenticator.publicKeyFingerprint(
+                                                localKey))));
+        session.lastTxMs = System.currentTimeMillis();
+        maybeAuthenticate(session);
+
+        Arrays.fill(localKey, (byte) 0);
+        Arrays.fill(transcript, (byte) 0);
+        Arrays.fill(signature, (byte) 0);
+    }
+
+    private void handleAuthOk(
+            DeviceSession session,
+            Frame frame) {
+        if (!session.remoteAuthVerified) {
+            // Receiving AUTH_OK before validating AUTH is not sufficient.
+            throw new SecurityException("AUTH_OK before authenticated peer");
+        }
+        session.authOkReceived = true;
+        maybeAuthenticate(session);
+    }
+
+    private void maybeAuthenticate(DeviceSession session) {
+        if (!session.authenticated
+                && session.localAuthSent
+                && session.remoteAuthVerified
+                && session.authOkReceived) {
+            session.authenticated = true;
+            sendCapabilities(session);
+        }
+    }
+
+    private void syncAwarePeerKey(
+            DeviceSession session,
+            Frame frame) {
+        if (wifiAware == null) return;
+        JSONArray endpoints =
+                frame.payload.optJSONArray("bulkEndpoints");
+        if (endpoints == null) return;
+
+        for (int i = 0; i < endpoints.length(); i++) {
+            JSONObject item = endpoints.optJSONObject(i);
+            if (item == null
+                    || !"wifi-aware".equals(
+                            item.optString("transport", ""))) {
+                continue;
+            }
+            String encoded =
+                    item.optString("token", "");
+            if (encoded.isEmpty()) return;
+            try {
+                byte[] remoteToken =
+                        BulkTransferProtocol.decodeToken(encoded);
+                wifiAware.setPeerBulkToken(remoteToken);
+                Arrays.fill(remoteToken, (byte) 0);
+            } catch (Exception ignored) {}
+            return;
         }
     }
 
@@ -346,6 +692,21 @@ public final class ConnectionService extends Service {
             if (wifiDirect != null) {
                 transports.put("wifi-direct");
             }
+            if (wifiAware != null
+                    && wifiAware.localIpv6() != null) {
+                transports.put("wifi-aware");
+            }
+
+            JSONArray capabilities =
+                    new JSONArray()
+                            .put("transport.ping")
+                            .put("device.info")
+                            .put("bulk.file-transfer");
+            if (RemoteInputAccessibilityService.instance() != null
+                    && RemoteControlAuthorization.isAuthorized(
+                            this, session.address())) {
+                capabilities.put("remote.control");
+            }
 
             JSONObject payload =
                     new JSONObject()
@@ -360,10 +721,7 @@ public final class ConnectionService extends Service {
                                     transports)
                             .put(
                                     "capabilities",
-                                    new JSONArray()
-                                            .put("transport.ping")
-                                            .put("device.info")
-                                            .put("bulk.file-transfer"));
+                                    capabilities);
 
             JSONArray endpoints =
                     new JSONArray();
@@ -384,6 +742,20 @@ public final class ConnectionService extends Service {
                                     .put(
                                             "transport",
                                             endpoint.transport));
+                }
+
+                if (wifiAware != null) {
+                    String localIpv6 = wifiAware.localIpv6();
+                    if (localIpv6 != null) {
+                        endpoints.put(
+                                new JSONObject()
+                                        .put("host", localIpv6)
+                                        .put("port", bulk.port())
+                                        .put("token",
+                                                BulkTransferProtocol.encodeToken(
+                                                        bulk.authorizationToken()))
+                                        .put("transport", "wifi-aware"));
+                    }
                 }
             }
 
@@ -436,10 +808,14 @@ public final class ConnectionService extends Service {
 
     @Override public void onDestroy() {
         commandExecutor.shutdownNow();
+        if (rtc != null) rtc.close();
         unregisterNetworkTopologyMonitor();
 
         if (wifiDirect != null) {
             wifiDirect.close();
+        }
+        if (wifiAware != null) {
+            wifiAware.close();
         }
         if (peers != null) {
             peers.close();

@@ -15,10 +15,9 @@ public final class MultipathCryptoTest {
         SecureRandom random = new SecureRandom();
         byte[] token = new byte[MultipathCrypto.TOKEN_BYTES];
         byte[] hash = new byte[MultipathCrypto.HASH_BYTES];
-        byte[] iv = new byte[MultipathCrypto.GCM_IV_BYTES];
         random.nextBytes(token);
         random.nextBytes(hash);
-        random.nextBytes(iv);
+        byte[] iv = MultipathCrypto.deterministicIv("transfer-1", 0);
 
         String id = "transfer-1";
         String name = "payload.bin";
@@ -36,6 +35,14 @@ public final class MultipathCryptoTest {
                 token, tag, id, 128, 0, plaintext.length, hash,
                 0, 1, name, iv));
 
+        byte[] tamperedDescriptorTag = MultipathCrypto.authorizationTag(
+                token, id, 128, 0, plaintext.length, hash,
+                0, 1, name, iv);
+        tamperedDescriptorTag[0] ^= 0x01;
+        assertFalse(MultipathCrypto.verifyAuthorizationTag(
+                token, tamperedDescriptorTag, id, 128, 0, plaintext.length, hash,
+                0, 1, name, iv));
+
         byte[] ciphertext = MultipathCrypto.encrypt(
                 token, id, 0, plaintext, aad, iv);
         byte[] recovered = MultipathCrypto.decrypt(
@@ -44,13 +51,23 @@ public final class MultipathCryptoTest {
         assertArrayEquals(plaintext, recovered);
     }
 
+    @Test public void chunkNoncesAreDeterministicAndDistinct() throws Exception {
+        byte[] first = MultipathCrypto.deterministicIv("transfer-1", 0);
+        byte[] retry = MultipathCrypto.deterministicIv("transfer-1", 0);
+        byte[] second = MultipathCrypto.deterministicIv("transfer-1", 1);
+        byte[] otherTransfer = MultipathCrypto.deterministicIv("transfer-2", 0);
+
+        assertArrayEquals(first, retry);
+        assertFalse(Arrays.equals(first, second));
+        assertFalse(Arrays.equals(first, otherTransfer));
+    }
+
     @Test public void tamperingIsDetected() throws Exception {
         byte[] token = new byte[MultipathCrypto.TOKEN_BYTES];
         Arrays.fill(token, (byte) 0x21);
         byte[] hash = new byte[MultipathCrypto.HASH_BYTES];
         Arrays.fill(hash, (byte) 0x42);
-        byte[] iv = new byte[MultipathCrypto.GCM_IV_BYTES];
-        Arrays.fill(iv, (byte) 0x09);
+        byte[] iv = MultipathCrypto.deterministicIv("transfer-2", 1);
 
         byte[] plaintext = new byte[128];
         Arrays.fill(plaintext, (byte) 0x55);
