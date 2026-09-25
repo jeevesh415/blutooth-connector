@@ -3,6 +3,8 @@ package com.jeevesh415.blutoothconnector.security;
 import android.content.Context;
 import android.content.SharedPreferences;
 import android.util.Base64;
+import android.security.keystore.KeyGenParameterSpec;
+import android.security.keystore.KeyProperties;
 
 import java.io.ByteArrayOutputStream;
 import java.io.DataOutputStream;
@@ -201,7 +203,14 @@ public final class SessionAuthenticator {
         KeyPairGenerator generator =
                 KeyPairGenerator.getInstance("EC", KEYSTORE);
         generator.initialize(
-                new ECGenParameterSpec("secp256r1"));
+                new KeyGenParameterSpec.Builder(
+                        ALIAS,
+                        KeyProperties.PURPOSE_SIGN
+                                | KeyProperties.PURPOSE_VERIFY)
+                        .setAlgorithmParameterSpec(
+                                new ECGenParameterSpec("secp256r1"))
+                        .setDigests(KeyProperties.DIGEST_SHA256)
+                        .build());
         return generator.generateKeyPair();
     }
 
