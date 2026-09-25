@@ -331,6 +331,24 @@ public final class RtcPeerManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Request the remote peer to terminate this RTC session, then close the
+     * local engine. Used by the viewer lifecycle so projection resources do
+     * not remain active after the UI is closed.
+     */
+    public void requestStop(DeviceSession session) {
+        if (session == null) return;
+        String peer = session.address();
+        String sid = sessionIds.get(peer);
+        if (sid != null) {
+            send(
+                    session,
+                    Protocol.RTC_STOP,
+                    new JSONObject().put("sid", sid));
+        }
+        stop(peer);
+    }
+
     public void stop(String peerAddress) {
         LowLatencyRtcEngine engine = engines.remove(peerAddress);
         if (engine != null) {
