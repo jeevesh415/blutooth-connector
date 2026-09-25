@@ -16,6 +16,11 @@ import android.content.pm.ServiceInfo;
 
 import com.jeevesh415.blutoothconnector.capability.CapabilityRegistry;
 import com.jeevesh415.blutoothconnector.capability.DeviceInfoCapability;
+import com.jeevesh415.blutoothconnector.capability.DeviceStateCapability;
+import com.jeevesh415.blutoothconnector.capability.RemoteControlCapability;
+import com.jeevesh415.blutoothconnector.capability.AppControlCapability;
+import com.jeevesh415.blutoothconnector.capability.DevicePolicyCapability;
+import com.jeevesh415.blutoothconnector.capability.UiInspectCapability;
 import com.jeevesh415.blutoothconnector.protocol.CommandRouter;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
@@ -226,8 +231,12 @@ public final class ConnectionService extends Service {
                     notification());
         }
 
-        registry.register(
-                new DeviceInfoCapability());
+        registry.register(new DeviceInfoCapability());
+        registry.register(new DeviceStateCapability(this));
+        registry.register(new RemoteControlCapability(this));
+        registry.register(new AppControlCapability(this));
+        registry.register(new DevicePolicyCapability(this));
+        registry.register(new UiInspectCapability());
 
         BluetoothAdapter adapter =
                 BluetoothAdapter.getDefaultAdapter();
@@ -376,6 +385,10 @@ public final class ConnectionService extends Service {
 
             if (!session.authenticated) {
                 throw new SecurityException("Session is not authenticated");
+            }
+
+            if (!session.replayGuard.accept(frame.sequence)) {
+                throw new SecurityException("Replay or out-of-order frame rejected");
             }
 
             if (Protocol.CAPABILITIES.equals(frame.type)) {
@@ -663,7 +676,8 @@ public final class ConnectionService extends Service {
                 Frame result =
                         router.route(
                                 frame,
-                                session.address());
+                                session.address(),
+                                this);
                 session.connection.send(
                         new Frame(
                                 result.version,
@@ -701,11 +715,22 @@ public final class ConnectionService extends Service {
                     new JSONArray()
                             .put("transport.ping")
                             .put("device.info")
+                            .put("device.state")
                             .put("bulk.file-transfer");
-            if (RemoteInputAccessibilityService.instance() != null
-                    && RemoteControlAuthorization.isAuthorized(
-                            this, session.address())) {
+
+            boolean authorized =
+                    RemoteControlAuthorization.isAuthorized(
+                            this, session.address());
+
+            if (authorized) {
+                capabilities.put("app.control");
+                capabilities.put("device.policy");
+            }
+
+            if (authorized
+                    && RemoteInputAccessibilityService.instance() != null) {
                 capabilities.put("remote.control");
+                capabilities.put("ui.inspect");
             }
 
             JSONObject payload =

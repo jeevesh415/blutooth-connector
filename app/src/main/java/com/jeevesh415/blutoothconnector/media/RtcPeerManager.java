@@ -341,10 +341,14 @@ public final class RtcPeerManager implements AutoCloseable {
         String peer = session.address();
         String sid = sessionIds.get(peer);
         if (sid != null) {
-            send(
-                    session,
-                    Protocol.RTC_STOP,
-                    new JSONObject().put("sid", sid));
+            try {
+                send(
+                        session,
+                        Protocol.RTC_STOP,
+                        new JSONObject().put("sid", sid));
+            } catch (Exception error) {
+                listener.onError(peer, error);
+            }
         }
         stop(peer);
     }

@@ -232,10 +232,16 @@ public final class WifiAwarePathManager implements AutoCloseable {
                             peerPort = remotePort;
                         }
 
-                        requestSubscriberNetworkIfReady(
-                                session,
-                                handle,
-                                remotePort);
+                        SubscribeDiscoverySession discoverySession;
+                        synchronized (WifiAwarePathManager.this) {
+                            discoverySession = subscribeSession;
+                        }
+                        if (discoverySession != null) {
+                            requestSubscriberNetworkIfReady(
+                                    discoverySession,
+                                    handle,
+                                    remotePort);
+                        }
                     }
 
                     @Override public void onServiceLost(
@@ -480,6 +486,10 @@ public final class WifiAwarePathManager implements AutoCloseable {
                 output, SERVICE_INFO_PREFIX.length,
                 portBytes.length);
         return output;
+    }
+
+    static int parsePortForTest(byte[] info) {
+        return parsePort(info);
     }
 
     static int parsePort(byte[] info) {

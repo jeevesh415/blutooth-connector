@@ -406,6 +406,7 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
     }
 
+    @SuppressLint("MissingPermission")
     private String safeName(BluetoothDevice device) {
         try {
             String name = device.getName();
