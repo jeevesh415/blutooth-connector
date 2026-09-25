@@ -333,6 +333,16 @@ public final class MainActivity extends Activity {
         infoAll.setOnClickListener(v -> queryAllDeviceInfo());
         root.addView(infoAll, new LinearLayout.LayoutParams(-1, -2));
 
+        Button stateAll = new Button(this);
+        stateAll.setText("Query deep device state");
+        stateAll.setOnClickListener(v -> queryAllDeviceState());
+        root.addView(stateAll, new LinearLayout.LayoutParams(-1, -2));
+
+        Button launchApp = new Button(this);
+        launchApp.setText("Launch app on first peer");
+        launchApp.setOnClickListener(v -> launchAppOnFirstPeer());
+        root.addView(launchApp, new LinearLayout.LayoutParams(-1, -2));
+
         Button sendFile = new Button(this);
         sendFile.setText("Send file to all connected devices");
         sendFile.setOnClickListener(v -> chooseFile());
@@ -379,6 +389,11 @@ public final class MainActivity extends Activity {
         revokeRemote.setText("Revoke first peer remote control");
         revokeRemote.setOnClickListener(v -> revokeFirstPeer());
         root.addView(revokeRemote, new LinearLayout.LayoutParams(-1, -2));
+
+        Button deviceAdmin = new Button(this);
+        deviceAdmin.setText("Enable device-admin capabilities");
+        deviceAdmin.setOnClickListener(v -> openDeviceAdminEnrollment());
+        root.addView(deviceAdmin, new LinearLayout.LayoutParams(-1, -2));
 
         Button accessibilitySettings = new Button(this);
         accessibilitySettings.setText("Open Accessibility settings");
@@ -514,6 +529,104 @@ public final class MainActivity extends Activity {
                             + ": " + frame.payload.toString());
                 }
             }));
+        }
+    }
+
+    private void queryAllDeviceState() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("No connected peers.");
+            return;
+        }
+
+        for (DeviceSession session : peers.sessions()) {
+            ReliableCommandClient client = commandClients.get(session.address());
+            if (client == null) {
+                attachCommandClient(session);
+                client = commandClients.get(session.address());
+            }
+            if (client == null) continue;
+
+            client.execute(
+                    session.nextSequence(),
+                    "device.state",
+                    "get",
+                    null
+            ).whenComplete((frame, error) -> runOnUiThread(() -> {
+                if (error != null) {
+                    updateStatus("Device state failed for "
+                            + safeName(session.device) + ": "
+                            + safeError(error));
+                } else {
+                    updateStatus("Deep state from "
+                            + safeName(session.device) + ": "
+                            + frame.payload.toString());
+                }
+            }));
+        }
+    }
+
+    private void launchAppOnFirstPeer() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            status.setText("Connect a peer first.");
+            return;
+        }
+
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setHint("package.name");
+        input.setSingleLine(true);
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Launch package on first peer")
+                .setMessage("The remote peer must have explicitly authorized this phone.")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Launch", (dialog, which) -> {
+                    DeviceSession session = peers.sessions().iterator().next();
+                    ReliableCommandClient client = commandClients.get(session.address());
+                    if (client == null) {
+                        attachCommandClient(session);
+                        client = commandClients.get(session.address());
+                    }
+                    if (client == null) return;
+
+                    try {
+                        JSONObject payload = new JSONObject()
+                                .put("packageName", input.getText().toString().trim());
+                        client.execute(
+                                session.nextSequence(),
+                                "app.control",
+                                "launch",
+                                payload
+                        ).whenComplete((frame, error) -> runOnUiThread(() -> {
+                            if (error != null) {
+                                updateStatus("Launch failed: " + safeError(error));
+                            } else {
+                                updateStatus("Remote launch result: "
+                                        + frame.payload.toString());
+                            }
+                        }));
+                    } catch (Exception error) {
+                        updateStatus("Invalid launch request: " + safeError(error));
+                    }
+                })
+                .show();
+    }
+
+    private void openDeviceAdminEnrollment() {
+        try {
+            Intent intent = new Intent(
+                    android.app.admin.DevicePolicyManager.ACTION_ADD_DEVICE_ADMIN);
+            intent.putExtra(
+                    android.app.admin.DevicePolicyManager.EXTRA_DEVICE_ADMIN,
+                    new ComponentName(
+                            this,
+                            com.jeevesh415.blutoothconnector.admin.BlutoothDeviceAdminReceiver.class));
+            intent.putExtra(
+                    android.app.admin.DevicePolicyManager.EXTRA_ADD_EXPLANATION,
+                    "Enables explicitly authorized peers to use device-admin operations supported by Android.");
+            startActivity(intent);
+        } catch (Exception error) {
+            updateStatus("Device-admin enrollment unavailable: " + safeError(error));
         }
     }
 

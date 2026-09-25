@@ -37,7 +37,7 @@ The application must never assume unrestricted Android control. Each capability 
 
 Every device relationship should be explicitly paired and revocable. Commands should be authenticated, sessions encrypted, and capabilities authorized independently. The receiver must reject unsupported or unauthorized operations.
 
-## Current milestone - 0.6
+## Current milestone - 0.7
 
 The repository now contains the bidirectional Bluetooth control plane, capability routing, adaptive command retries, foreground service ownership, encrypted BCL3 multipath bulk transfer, Android Network-specific path binding, and automated JVM/loopback verification.
 
@@ -116,6 +116,24 @@ The bulk path can stripe chunks across distinct Android Network objects and now 
 
 WebRTC media is **not** presented as multipath. It currently uses normal ICE/WebRTC path selection. True RTP multipath would require a dedicated media transport design or WebRTC stack changes.
 
+## Deep-control smoke test
+
+On Phone B:
+
+1. Enable this app's Accessibility service.
+2. In the app, authorize Phone A as a remote-control peer.
+3. For device-policy operations, optionally activate the app as a device admin. Reboot remains unavailable unless the app is provisioned as device owner.
+4. Keep the receiver service active.
+
+On Phone A:
+
+1. Connect the paired peer.
+2. Query deep device state.
+3. Use the remote screen/control flow for gesture or semantic-node actions.
+4. Launch a launchable package through `app.control`.
+
+Protected commands are rejected before capability execution when the peer has not been explicitly authorized, and replayed/out-of-order authenticated frames are rejected at the session boundary.
+
 ## Current practical test
 
 On Phone B:
@@ -158,6 +176,20 @@ The mathematical layer is deliberately used for **scheduling**, not for pretendi
 
 The architecture is compatible with a future path-ID model similar to multipath QUIC: independent path state, path-specific sequencing/congestion control, and an application scheduler above the transport. Android Wi-Fi Direct provides a direct peer-to-peer path, while Wi-Fi Aware supports direct high-speed bidirectional connections when a socket is established. These are candidates for additional channels, not assumptions that every phone supports them.
 
+
+## Deep Control Plane - 0.7
+
+Phone B now exposes a deeper, capability-gated control surface after the existing authenticated Bluetooth session:
+
+- `device.state` — battery, charging state, interactivity, keyguard state, accessibility readiness, and active network transports.
+- `remote.control` — explicit Accessibility-backed tap, swipe, navigation, text, and semantic node actions.
+- `ui.inspect` — bounded accessibility-tree inspection with password-field text/content masked.
+- `app.control` — explicitly authorized launch of a user-installed launchable package.
+- `device.policy` — device-admin status and lock operations; reboot is exposed only when the receiver is provisioned as the device owner.
+
+The command router enforces the receiver-side authorization gate for protected capabilities, and each authenticated session now rejects replayed or out-of-order control frames before execution. Android's AccessibilityService API permits user-enabled services to dispatch gestures and perform global actions; device-owner APIs are the platform boundary for deeper device policy operations. citeturn522233search0turn522233search2turn957562search0
+
+The project still does **not** attempt to bypass Android's security model. Screen capture remains MediaProjection/user-consent based, Accessibility must be enabled by the user, and device-owner-only operations remain unavailable on ordinary unmanaged installations. citeturn522233search0turn522233search2
 
 ## Validation boundary
 

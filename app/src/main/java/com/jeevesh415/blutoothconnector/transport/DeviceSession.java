@@ -40,6 +40,9 @@ public final class DeviceSession {
     public volatile long lastPingSentNs;
     public volatile long lastRxSequence = Long.MIN_VALUE;
     public volatile int reconnectAttempt;
+    /** Rejects replayed or out-of-order authenticated control frames. */
+    public final com.jeevesh415.blutoothconnector.protocol.ControlReplayGuard replayGuard =
+            new com.jeevesh415.blutoothconnector.protocol.ControlReplayGuard();
 
     public DeviceSession(BluetoothDevice device, BluetoothSocket socket,
                           FramedConnection connection) {
