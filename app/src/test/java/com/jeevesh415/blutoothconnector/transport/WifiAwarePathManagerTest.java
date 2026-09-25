@@ -5,7 +5,9 @@ import org.junit.Test;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
 
+import static org.junit.Assert.assertArrayEquals;
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.assertTrue;
 
 public final class WifiAwarePathManagerTest {
@@ -46,5 +48,32 @@ public final class WifiAwarePathManagerTest {
         assertTrue(
                 WifiAwarePathManager.parsePortForTest(
                         Arrays.copyOf(PREFIX, PREFIX.length)) < 0);
+    }
+
+    @Test public void pmkDerivationIsSymmetric() {
+        byte[] a = fill((byte) 0x11);
+        byte[] b = fill((byte) 0x77);
+
+        byte[] left = WifiAwarePathManager.derivePmk(a, b);
+        byte[] right = WifiAwarePathManager.derivePmk(b, a);
+
+        assertArrayEquals(left, right);
+    }
+
+    @Test public void pmkChangesWhenEitherTokenChanges() {
+        byte[] a = fill((byte) 0x11);
+        byte[] b = fill((byte) 0x77);
+        byte[] changed = Arrays.copyOf(b, b.length);
+        changed[0] ^= 0x01;
+
+        assertFalse(Arrays.equals(
+                WifiAwarePathManager.derivePmk(a, b),
+                WifiAwarePathManager.derivePmk(a, changed)));
+    }
+
+    private static byte[] fill(byte value) {
+        byte[] result = new byte[32];
+        Arrays.fill(result, value);
+        return result;
     }
 }
