@@ -22,7 +22,7 @@ import org.webrtc.SurfaceTextureHelper;
 import org.webrtc.VideoSource;
 import org.webrtc.VideoTrack;
 
-import java.util.ArrayList;
+import java.util.ArrayDeque;
 import java.util.Collections;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,6 +64,8 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     private SurfaceTextureHelper surfaceTextureHelper;
     private org.webrtc.VideoCapturer screenCapturer;
     private DataChannel controlChannel;
+    private final ArrayDeque<String> pendingControl = new ArrayDeque<>();
+    private static final int MAX_PENDING_CONTROL = 32;
 
     public static void initialize(Context context) {
         if (!INITIALIZED.compareAndSet(false, true)) return;
@@ -116,23 +118,8 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
 
                     @Override public void onDataChannel(DataChannel channel) {
                         controlChannel = channel;
-                        channel.registerObserver(new DataChannel.Observer() {
-                            @Override public void onBufferedAmountChange(long amount) {}
-
-                            @Override public void onStateChange() {}
-
-                            @Override public void onMessage(DataChannel.Buffer buffer) {
-                                try {
-                                    java.nio.ByteBuffer data = buffer.data;
-                                    byte[] bytes = new byte[data.remaining()];
-                                    data.get(bytes);
-                                    listener.onDataMessage(
-                                            new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-                                } catch (Exception e) {
-                                    listener.onError(e);
-                                }
-                            }
-                        });
+                        channel.registerObserver(controlObserver());
+                        listener.onState("control-channel:" + channel.state());
                     }
 
                     @Override public void onSignalingChange(
@@ -178,6 +165,28 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
         if (peer == null) {
             throw new IllegalStateException("Unable to create WebRTC peer connection");
         }
+    }
+
+    private DataChannel.Observer controlObserver() {
+        return new DataChannel.Observer() {
+            @Override public void onBufferedAmountChange(long amount) {}
+
+            @Override public void onStateChange() {
+                flushPendingControl();
+            }
+
+            @Override public void onMessage(DataChannel.Buffer buffer) {
+                try {
+                    java.nio.ByteBuffer data = buffer.data;
+                    byte[] bytes = new byte[data.remaining()];
+                    data.get(bytes);
+                    listener.onDataMessage(
+                            new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
+                } catch (Exception e) {
+                    listener.onError(e);
+                }
+            }
+        };
     }
 
     public EglBase.Context eglContext() {
@@ -229,37 +238,54 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
 
     public synchronized void createControlChannel() {
         if (controlChannel != null) return;
-        controlChannel = peer.createDataChannel(
-                "control",
-                new DataChannel.Init());
-        controlChannel.registerObserver(new DataChannel.Observer() {
-            @Override public void onBufferedAmountChange(long amount) {}
-
-            @Override public void onStateChange() {}
-
-            @Override public void onMessage(DataChannel.Buffer buffer) {
-                try {
-                    java.nio.ByteBuffer data = buffer.data;
-                    byte[] bytes = new byte[data.remaining()];
-                    data.get(bytes);
-                    listener.onDataMessage(
-                            new String(bytes, java.nio.charset.StandardCharsets.UTF_8));
-                } catch (Exception e) {
-                    listener.onError(e);
-                }
-            }
-        });
+        DataChannel.Init init = new DataChannel.Init();
+        init.ordered = false;
+        init.maxRetransmits = 1;
+        controlChannel = peer.createDataChannel("control", init);
+        controlChannel.registerObserver(controlObserver());
+        listener.onState("control-channel:" + controlChannel.state());
     }
 
     public synchronized void sendControl(String message) {
+        if (closed.get() || message == null) return;
+        byte[] bytes = message.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+        if (bytes.length > 8192) {
+            throw new IllegalArgumentException("Control message too large");
+        }
+
         if (controlChannel == null
                 || controlChannel.state() != DataChannel.State.OPEN) {
-            throw new IllegalStateException("control channel not open");
+            if (pendingControl.size() >= MAX_PENDING_CONTROL) {
+                pendingControl.removeFirst();
+            }
+            pendingControl.addLast(message);
+            return;
         }
-        byte[] bytes = message.getBytes(java.nio.charset.StandardCharsets.UTF_8);
-        controlChannel.send(
+
+        if (!controlChannel.send(
                 new DataChannel.Buffer(
-                        java.nio.ByteBuffer.wrap(bytes), false));
+                        java.nio.ByteBuffer.wrap(bytes), false))) {
+            if (pendingControl.size() >= MAX_PENDING_CONTROL) {
+                pendingControl.removeFirst();
+            }
+            pendingControl.addLast(message);
+        }
+    }
+
+    private synchronized void flushPendingControl() {
+        if (controlChannel == null
+                || controlChannel.state() != DataChannel.State.OPEN) return;
+
+        while (!pendingControl.isEmpty()) {
+            String message = pendingControl.peekFirst();
+            byte[] bytes = message.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+            if (!controlChannel.send(
+                    new DataChannel.Buffer(
+                            java.nio.ByteBuffer.wrap(bytes), false))) {
+                return;
+            }
+            pendingControl.removeFirst();
+        }
     }
 
     public synchronized void createOffer() {
@@ -341,6 +367,7 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
         try {
             if (screenCapturer != null) screenCapturer.stopCapture();
         } catch (Exception ignored) {}
+        pendingControl.clear();
         if (surfaceTextureHelper != null) surfaceTextureHelper.dispose();
         if (peer != null) peer.close();
         if (videoTrack != null) videoTrack.dispose();
