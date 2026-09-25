@@ -15,6 +15,7 @@ import android.content.Intent;
 import android.content.pm.ServiceInfo;
 
 import com.jeevesh415.blutoothconnector.capability.CapabilityRegistry;
+import com.jeevesh415.blutoothconnector.capability.CapabilityManifest;
 import com.jeevesh415.blutoothconnector.capability.DeviceInfoCapability;
 import com.jeevesh415.blutoothconnector.capability.DeviceStateCapability;
 import com.jeevesh415.blutoothconnector.capability.RemoteControlCapability;
@@ -733,6 +734,25 @@ public final class ConnectionService extends Service {
                 capabilities.put("ui.inspect");
             }
 
+            JSONArray features =
+                    new JSONArray()
+                            .put(Protocol.FEATURE_CAPABILITY_MANIFEST_V1)
+                            .put(Protocol.FEATURE_MULTIPATH_PATH_ID_V1)
+                            .put(Protocol.FEATURE_RTC_CONTROL_V3);
+
+            JSONArray capabilityManifest =
+                    new JSONArray();
+            for (CapabilityManifest.Entry entry :
+                    CapabilityManifest.from(registry)) {
+                capabilityManifest.put(
+                        new JSONObject()
+                                .put("id", entry.id)
+                                .put("version", entry.version)
+                                .put(
+                                        "requiresExplicitAuthorization",
+                                        entry.requiresExplicitAuthorization));
+            }
+
             JSONObject payload =
                     new JSONObject()
                             .put(
@@ -745,8 +765,14 @@ public final class ConnectionService extends Service {
                                     "transports",
                                     transports)
                             .put(
+                                    "features",
+                                    features)
+                            .put(
                                     "capabilities",
-                                    capabilities);
+                                    capabilities)
+                            .put(
+                                    "capabilityManifest",
+                                    capabilityManifest);
 
             JSONArray endpoints =
                     new JSONArray();
