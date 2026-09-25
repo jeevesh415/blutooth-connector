@@ -96,7 +96,7 @@ The repository now includes a WebRTC real-time path bootstrapped by Bluetooth RF
 
 ## Wi-Fi Aware path
 
-Wi-Fi Aware is wired into the bulk multipath architecture on supported Android 12+ devices. Each side publishes/subscribes to the BCL service, establishes a secure Aware data path using the existing 32-byte BCL3 key as the PMK, and exposes the resulting Android Network as a wifi-aware bulk endpoint.
+Wi-Fi Aware is wired into the bulk multipath architecture on supported Android 12+ devices. Each side publishes/subscribes to the BCL service, establishes a secure Aware data path using a PMK derived symmetrically from both peers' authenticated BCL3 bulk tokens, and exposes the resulting Android Network as a wifi-aware bulk endpoint.
 
 The path remains optional: device support and current Aware availability are checked at runtime. Bluetooth RFCOMM remains the control/signaling and capability channel.
 
