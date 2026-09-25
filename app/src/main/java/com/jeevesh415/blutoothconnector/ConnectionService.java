@@ -467,25 +467,8 @@ public final class ConnectionService extends Service {
 
         byte[] localKey = SessionAuthenticator.publicKey(this);
         byte[] transcript = SessionAuthenticator.transcript(
-                session.address(),
                 localKey,
                 session.localAuthNonce,
-                session.address(),
-                remoteKey,
-                remoteNonce);
-
-        // Use the canonical transport identities again with the peer key on the
-        // remote side. Both peers sort the two Bluetooth addresses internally.
-        // The local Bluetooth address is the only transport identity exposed by
-        // the socket, so the second tuple is reconstructed below from the
-        // received peer identity.
-        String remoteAddress =
-                session.device.getAddress();
-        transcript = SessionAuthenticator.transcript(
-                "00:00:00:00:00:01",
-                localKey,
-                session.localAuthNonce,
-                remoteAddress,
                 remoteKey,
                 remoteNonce);
 
@@ -537,19 +520,8 @@ public final class ConnectionService extends Service {
 
         byte[] localKey = SessionAuthenticator.publicKey(this);
         byte[] transcript = SessionAuthenticator.transcript(
-                session.address(),
                 localKey,
                 session.localAuthNonce,
-                session.address(),
-                session.remoteIdentityKey,
-                session.remoteAuthNonce);
-
-        String remoteAddress = session.device.getAddress();
-        transcript = SessionAuthenticator.transcript(
-                "00:00:00:00:00:01",
-                localKey,
-                session.localAuthNonce,
-                remoteAddress,
                 session.remoteIdentityKey,
                 session.remoteAuthNonce);
 
