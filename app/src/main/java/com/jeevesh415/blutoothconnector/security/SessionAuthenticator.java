@@ -16,7 +16,6 @@ import java.security.PublicKey;
 import java.security.Signature;
 import java.security.spec.ECGenParameterSpec;
 import java.security.spec.X509EncodedKeySpec;
-import java.util.Arrays;
 import java.util.Locale;
 
 /**
@@ -72,8 +71,7 @@ public final class SessionAuthenticator {
         }
 
         PublicKey key = KeyFactory.getInstance("EC")
-                .generatePublic(
-                        new X509EncodedKeySpec(encodedPublicKey));
+                .generatePublic(new X509EncodedKeySpec(encodedPublicKey));
         Signature signature = Signature.getInstance("SHA256withECDSA");
         signature.initVerify(key);
         signature.update(transcript);
@@ -81,53 +79,58 @@ public final class SessionAuthenticator {
     }
 
     /**
-     * Canonical, symmetric transcript. Address ordering makes both peers
-     * construct exactly the same signed bytes without an initiator flag.
+     * Canonical symmetric transcript. Sorting by public-key bytes means both
+     * peers produce the same transcript without relying on a local adapter MAC.
      */
     public static byte[] transcript(
-            String addressA,
             byte[] publicKeyA,
             byte[] nonceA,
-            String addressB,
             byte[] publicKeyB,
             byte[] nonceB) {
-        if (!validAddress(addressA) || !validAddress(addressB)) {
-            throw new IllegalArgumentException("Invalid Bluetooth address");
-        }
         validateBlob(publicKeyA, "publicKeyA");
         validateBlob(publicKeyB, "publicKeyB");
         validateNonce(nonceA);
         validateNonce(nonceB);
 
-        String a = normalize(addressA);
-        String b = normalize(addressB);
+        boolean first =
+                compare(publicKeyA, publicKeyB) <= 0;
 
         try {
-            ByteArrayOutputStream bytes = new ByteArrayOutputStream(256);
-            DataOutputStream out = new DataOutputStream(bytes);
+            ByteArrayOutputStream bytes =
+                    new ByteArrayOutputStream(256);
+            DataOutputStream out =
+                    new DataOutputStream(bytes);
             out.writeUTF("BCL-AUTH-1");
-
-            if (a.compareTo(b) <= 0) {
-                writeTuple(out, a, publicKeyA, nonceA);
-                writeTuple(out, b, publicKeyB, nonceB);
+            if (first) {
+                writeTuple(out, publicKeyA, nonceA);
+                writeTuple(out, publicKeyB, nonceB);
             } else {
-                writeTuple(out, b, publicKeyB, nonceB);
-                writeTuple(out, a, publicKeyA, nonceA);
+                writeTuple(out, publicKeyB, nonceB);
+                writeTuple(out, publicKeyA, nonceA);
             }
-
             out.flush();
             return bytes.toByteArray();
         } catch (java.io.IOException error) {
-            throw new IllegalStateException("Unable to encode transcript", error);
+            throw new IllegalStateException(
+                    "Unable to encode transcript",
+                    error);
         }
+    }
+
+    private static int compare(byte[] a, byte[] b) {
+        int length = Math.min(a.length, b.length);
+        for (int i = 0; i < length; i++) {
+            int left = a[i] & 0xff;
+            int right = b[i] & 0xff;
+            if (left != right) return Integer.compare(left, right);
+        }
+        return Integer.compare(a.length, b.length);
     }
 
     private static void writeTuple(
             DataOutputStream out,
-            String address,
             byte[] publicKey,
             byte[] nonce) throws java.io.IOException {
-        out.writeUTF(address);
         out.writeInt(publicKey.length);
         out.write(publicKey);
         out.writeInt(nonce.length);
@@ -138,10 +141,13 @@ public final class SessionAuthenticator {
             Context context, String peerAddress) {
         if (context == null || !validAddress(peerAddress)) return null;
         String value = prefs(context)
-                .getString(KEY_PREFIX + fingerprint(peerAddress), null);
+                .getString(
+                        KEY_PREFIX + fingerprint(peerAddress),
+                        null);
         if (value == null) return null;
         try {
-            byte[] key = Base64.decode(value, Base64.DEFAULT);
+            byte[] key =
+                    Base64.decode(value, Base64.DEFAULT);
             return key.length == 0 ? null : key;
         } catch (IllegalArgumentException error) {
             return null;
@@ -159,7 +165,9 @@ public final class SessionAuthenticator {
         prefs(context).edit()
                 .putString(
                         KEY_PREFIX + fingerprint(peerAddress),
-                        Base64.encodeToString(publicKey, Base64.NO_WRAP))
+                        Base64.encodeToString(
+                                publicKey,
+                                Base64.NO_WRAP))
                 .apply();
     }
 
@@ -170,12 +178,17 @@ public final class SessionAuthenticator {
                     MessageDigest.getInstance("SHA-256")
                             .digest(publicKey));
         } catch (Exception error) {
-            throw new IllegalStateException("SHA-256 unavailable", error);
+            throw new IllegalStateException(
+                    "SHA-256 unavailable",
+                    error);
         }
     }
 
     private static KeyPair getKeyPair(Context context) throws Exception {
-        if (context == null) throw new IllegalArgumentException("context");
+        if (context == null) {
+            throw new IllegalArgumentException("context");
+        }
+
         KeyStore store = KeyStore.getInstance(KEYSTORE);
         store.load(null);
         if (store.containsAlias(ALIAS)) {
@@ -194,7 +207,9 @@ public final class SessionAuthenticator {
 
     private static SharedPreferences prefs(Context context) {
         return context.getApplicationContext()
-                .getSharedPreferences(PREFS, Context.MODE_PRIVATE);
+                .getSharedPreferences(
+                        PREFS,
+                        Context.MODE_PRIVATE);
     }
 
     private static String fingerprint(String address) {
@@ -202,15 +217,15 @@ public final class SessionAuthenticator {
             return hex(
                     MessageDigest.getInstance("SHA-256")
                             .digest(
-                                    normalize(address)
-                                            .getBytes(StandardCharsets.UTF_8)));
+                                    address.trim()
+                                            .toUpperCase(Locale.US)
+                                            .getBytes(
+                                                    StandardCharsets.UTF_8)));
         } catch (Exception error) {
-            throw new IllegalStateException("SHA-256 unavailable", error);
+            throw new IllegalStateException(
+                    "SHA-256 unavailable",
+                    error);
         }
-    }
-
-    private static String normalize(String address) {
-        return address.trim().toUpperCase(Locale.US);
     }
 
     private static boolean validAddress(String address) {
@@ -225,7 +240,9 @@ public final class SessionAuthenticator {
         }
     }
 
-    private static void validateBlob(byte[] value, String name) {
+    private static void validateBlob(
+            byte[] value,
+            String name) {
         if (value == null
                 || value.length == 0
                 || value.length > MAX_PUBLIC_KEY_BYTES) {
@@ -235,11 +252,13 @@ public final class SessionAuthenticator {
 
     private static String hex(byte[] bytes) {
         char[] chars = new char[bytes.length * 2];
-        final char[] alphabet = "0123456789abcdef".toCharArray();
+        final char[] alphabet =
+                "0123456789abcdef".toCharArray();
         for (int i = 0; i < bytes.length; i++) {
             int value = bytes[i] & 0xff;
             chars[i * 2] = alphabet[value >>> 4];
-            chars[i * 2 + 1] = alphabet[value & 0x0f];
+            chars[i * 2 + 1] =
+                    alphabet[value & 0x0f];
         }
         return new String(chars);
     }
