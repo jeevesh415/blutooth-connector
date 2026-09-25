@@ -108,7 +108,7 @@ Because the app targets SDK 37, Android local-network access must be explicitly 
 
 Bluetooth pairing is the transport relationship, not authorization for high-risk actions. Bulk transfer uses per-transfer bearer tokens, HMAC authorization proofs, AES-256-GCM, deterministic transfer/chunk-bound 96-bit GCM nonces, and a final SHA-256 integrity check. Retries reuse the same nonce only for the same authenticated transfer/chunk; a different chunk or transfer derives a different nonce. Remote Accessibility control additionally requires an explicit peer grant on the receiving phone.
 
-This is still not a full production identity system: there is no certificate-backed device identity, X25519 enrollment protocol, or end-to-end audit trail. Those require a larger protocol migration and should not be inferred from Bluetooth pairing alone.
+The control plane now adds an Android Keystore application identity and a signed per-connection nonce transcript, with trust-on-first-use pinning per bonded Bluetooth address. This is stronger than treating Bluetooth pairing as application authorization, but it is still not a full interactive enrollment ceremony or certificate authority.
 
 ## Multipath boundary
 
@@ -133,6 +133,10 @@ On Phone A:
 5. The receiver advertises local TCP bulk endpoints through the Bluetooth capability exchange.
 
 The current controller includes a file-picker workflow and sends staged files to all connected peers. Runtime device benchmarks are still required to measure the actual benefit of independent Wi-Fi paths.
+
+## Low-latency control behavior
+
+RTC control uses an unordered DataChannel with a one-retransmission budget. Commands generated while ICE/DataChannel negotiation is incomplete are held in a small bounded queue and flushed when the channel opens; the protocol's session ID and monotonic sequence guard still reject stale or replayed commands. This reduces UI stalls without claiming zero latency.
 
 
 ## Adaptive multipath data plane
@@ -164,6 +168,6 @@ Current explicit limitations:
 - WebRTC media uses normal ICE path selection; true multipath RTP is not implemented.
 - Microphone capture is implemented; Android playback capture is not yet wired into the WebRTC audio device path.
 - Remote input requires the user to enable the AccessibilityService and separately authorize the Bluetooth peer.
-- Bluetooth pairing is not a certificate-backed application identity system.
+- Application identity uses an Android Keystore signing key plus trust-on-first-use pinning; there is no interactive enrollment/attestation authority.
 - Android 17 local-network and nearby-Wi-Fi permissions are requested at the point of use.
 - Wi-Fi Direct/Aware availability and simultaneous independent paths depend on the device chipset, Android routing, and RF environment.
