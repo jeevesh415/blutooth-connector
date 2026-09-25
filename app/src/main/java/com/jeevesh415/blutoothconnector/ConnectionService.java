@@ -445,6 +445,21 @@ public final class ConnectionService extends Service {
             throw new SecurityException("Invalid peer identity material");
         }
 
+        if (session.remoteIdentityKey != null
+                || session.remoteAuthNonce != null
+                || session.localAuthSent) {
+            if (!java.security.MessageDigest.isEqual(
+                        session.remoteIdentityKey, remoteKey)
+                    || !java.security.MessageDigest.isEqual(
+                        session.remoteAuthNonce, remoteNonce)) {
+                throw new SecurityException(
+                        "Peer attempted to renegotiate an authenticated identity");
+            }
+            if (session.authenticated) {
+                return;
+            }
+        }
+
         byte[] pinned =
                 SessionAuthenticator.pinnedPeer(
                         this,
