@@ -24,6 +24,9 @@ import android.os.Handler;
 import android.os.Looper;
 
 import java.net.Inet6Address;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
+import java.util.Arrays;
 import java.util.Locale;
 import java.util.concurrent.atomic.AtomicInteger;
 
@@ -69,7 +72,8 @@ public final class WifiAwarePathManager implements AutoCloseable {
     private ConnectivityManager.NetworkCallback networkCallback;
 
     private final int bulkPort;
-    private final byte[] pmk;
+    private final byte[] localBulkToken;
+    private volatile byte[] peerPmk;
 
     private volatile boolean started;
     private volatile boolean closed;
@@ -78,20 +82,20 @@ public final class WifiAwarePathManager implements AutoCloseable {
     public WifiAwarePathManager(
             Context context,
             int bulkPort,
-            byte[] pmk,
+            byte[] localBulkToken,
             Listener listener) {
         if (context == null) throw new IllegalArgumentException("context");
         if (bulkPort <= 0 || bulkPort > 65535) {
             throw new IllegalArgumentException("bulkPort");
         }
-        if (pmk == null || pmk.length != 32) {
-            throw new IllegalArgumentException("PMK must be 32 bytes");
+        if (localBulkToken == null || localBulkToken.length != 32) {
+            throw new IllegalArgumentException("Bulk token must be 32 bytes");
         }
 
         this.context = context.getApplicationContext();
         this.listener = listener;
         this.bulkPort = bulkPort;
-        this.pmk = pmk.clone();
+        this.localBulkToken = localBulkToken.clone();
 
         awareManager = (WifiAwareManager)
                 this.context.getSystemService(Context.WIFI_AWARE_SERVICE);
@@ -178,7 +182,7 @@ public final class WifiAwarePathManager implements AutoCloseable {
                         synchronized (WifiAwarePathManager.this) {
                             publishSession = session;
                         }
-                        requestPublisherNetwork(session);
+                        requestPublisherNetworkIfReady(session);
                     }
 
                     @Override public void onSessionConfigFailed() {
@@ -227,7 +231,7 @@ public final class WifiAwarePathManager implements AutoCloseable {
                             peerPort = remotePort;
                         }
 
-                        requestSubscriberNetwork(
+                        requestSubscriberNetworkIfReady(
                                 session,
                                 handle,
                                 remotePort);
@@ -262,14 +266,15 @@ public final class WifiAwarePathManager implements AutoCloseable {
     }
 
     @SuppressLint("MissingPermission")
-    private void requestPublisherNetwork(
+    private void requestPublisherNetworkIfReady(
             PublishDiscoverySession session) {
-        if (Build.VERSION.SDK_INT < 31) return;
+        byte[] key = peerPmkSnapshot();
+        if (Build.VERSION.SDK_INT < 31 || key == null) return;
 
         try {
             WifiAwareNetworkSpecifier specifier =
                     new WifiAwareNetworkSpecifier.Builder(session)
-                            .setPmk(pmk.clone())
+                            .setPmk(key)
                             .setPort(bulkPort)
                             .setTransportProtocol(6)
                             .build();
@@ -282,21 +287,24 @@ public final class WifiAwarePathManager implements AutoCloseable {
                             .build());
         } catch (Exception error) {
             notifyError(error);
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
     }
 
     @SuppressLint("MissingPermission")
-    private void requestSubscriberNetwork(
+    private void requestSubscriberNetworkIfReady(
             SubscribeDiscoverySession session,
             PeerHandle peer,
             int remotePort) {
-        if (Build.VERSION.SDK_INT < 31) return;
+        byte[] key = peerPmkSnapshot();
+        if (Build.VERSION.SDK_INT < 31 || key == null) return;
 
         try {
             WifiAwareNetworkSpecifier specifier =
                     new WifiAwareNetworkSpecifier.Builder(
                             session, peer)
-                            .setPmk(pmk.clone())
+                            .setPmk(key)
                             .build();
 
             requestNetwork(
@@ -307,7 +315,70 @@ public final class WifiAwarePathManager implements AutoCloseable {
                             .build());
         } catch (Exception error) {
             notifyError(error);
+        } finally {
+            Arrays.fill(key, (byte) 0);
         }
+    }
+
+    /**
+     * Called after the remote bulk token has arrived over the authenticated
+     * Bluetooth channel. The PMK is derived symmetrically from both tokens,
+     * so neither side has to expose its token over Wi-Fi Aware discovery.
+     */
+    public synchronized void setPeerBulkToken(byte[] remoteToken) {
+        if (remoteToken == null || remoteToken.length != 32) {
+            throw new IllegalArgumentException("Invalid peer bulk token");
+        }
+        byte[] derived = derivePmk(localBulkToken, remoteToken);
+        if (peerPmk != null) Arrays.fill(peerPmk, (byte) 0);
+        peerPmk = derived;
+
+        if (publishSession != null && network == null) {
+            requestPublisherNetworkIfReady(publishSession);
+        }
+        if (subscribeSession != null && peerHandle != null) {
+            requestSubscriberNetworkIfReady(
+                    subscribeSession,
+                    peerHandle,
+                    peerPort);
+        }
+    }
+
+    static byte[] derivePmk(
+            byte[] tokenA,
+            byte[] tokenB) {
+        if (tokenA == null || tokenA.length != 32
+                || tokenB == null || tokenB.length != 32) {
+            throw new IllegalArgumentException("Tokens must be 32 bytes");
+        }
+        try {
+            MessageDigest digest =
+                    MessageDigest.getInstance("SHA-256");
+            digest.update("BCL-AWARE-PMK-1".getBytes(StandardCharsets.US_ASCII));
+            if (compare(tokenA, tokenB) <= 0) {
+                digest.update(tokenA);
+                digest.update(tokenB);
+            } else {
+                digest.update(tokenB);
+                digest.update(tokenA);
+            }
+            return digest.digest();
+        } catch (Exception error) {
+            throw new IllegalStateException("SHA-256 unavailable", error);
+        }
+    }
+
+    private static int compare(byte[] a, byte[] b) {
+        for (int i = 0; i < a.length; i++) {
+            int left = a[i] & 0xff;
+            int right = b[i] & 0xff;
+            if (left != right) return Integer.compare(left, right);
+        }
+        return 0;
+    }
+
+    private synchronized byte[] peerPmkSnapshot() {
+        return peerPmk == null ? null : peerPmk.clone();
     }
 
     @SuppressLint("MissingPermission")
@@ -513,6 +584,8 @@ public final class WifiAwarePathManager implements AutoCloseable {
 
         peerHandle = null;
         peerPort = -1;
-        java.util.Arrays.fill(pmk, (byte) 0);
+        Arrays.fill(localBulkToken, (byte) 0);
+        if (peerPmk != null) Arrays.fill(peerPmk, (byte) 0);
+        peerPmk = null;
     }
 }
