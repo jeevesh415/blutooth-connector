@@ -1,0 +1,80 @@
+name: Historical Commit Verification
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: historical-verification-${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    name: Verify ${{ matrix.label }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        include:
+          - { label: "5d7339a", sha: "5d7339a4cd77a98b1f15d89378665cc95f301aad" }
+          - { label: "2583879", sha: "25838798d1448ab63d438340f087168f7396a42a" }
+          - { label: "4af9cc5", sha: "4af9cc55832978143e0e58b8415579a727d9417f" }
+          - { label: "f9c4788", sha: "f9c4788a824e7c7fcff97f9a603d99cb10bf914e" }
+          - { label: "dd1c804", sha: "dd1c80482eb225a7a0109e3994d4f7ec83850a73" }
+          - { label: "7aed3a2", sha: "7aed3a23e10986fa10b6b5d07f4b7cb35c78f6c4" }
+          - { label: "417ccd1", sha: "417ccd1ef763cad3fd766dac0dba974ccd30340b" }
+          - { label: "91954e1", sha: "91954e1d8aaf907096bae907321257348490c1f4" }
+          - { label: "f8c71b4", sha: "f8c71b469b4172d8419b45fec9f8f8c1d3493f41" }
+          - { label: "330c3f4", sha: "330c3f4206f4da355a929055ad1f27cf2e45f8cc" }
+          - { label: "46d1cfe", sha: "46d1cfe9ae5eb044fb16acd0c455d27700f9c12c" }
+          - { label: "2c5b02a", sha: "2c5b02a8cb45e8990a489c16ac729cde292a7357" }
+          - { label: "46ac193", sha: "46ac19309025727b86149cc6d97f1bab2c6767a8" }
+          - { label: "9991a8e", sha: "9991a8ef7824f11321c348a3a110b2a7e65a50f1" }
+          - { label: "5b1ec74", sha: "5b1ec74d16724f26ab853b4d1e4532781dfc9c20" }
+          - { label: "fd3e793", sha: "fd3e79305ead8632205ae11cd551a5e94406d770" }
+
+    steps:
+      - name: Checkout full history
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ matrix.sha }}
+          fetch-depth: 0
+
+      - name: Set up JDK
+        uses: actions/setup-java@v5
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Set up Android SDK
+        uses: android-actions/setup-android@v3
+        with:
+          packages: platform-tools
+
+      - name: Accept Android SDK licenses
+        run: yes | sdkmanager --licenses >/dev/null || true
+
+      - name: Install Android SDK packages
+        run: sdkmanager --channel=1 "platforms;android-37.0" "build-tools;36.0.0"
+
+      - name: Select Gradle command
+        id: gradle
+        shell: bash
+        run: |
+          if [ -x ./gradlew ]; then
+            echo "cmd=./gradlew --no-daemon" >> "$GITHUB_OUTPUT"
+          else
+            echo "cmd=gradle --no-daemon" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Gradle
+        if: steps.gradle.outputs.cmd == 'gradle --no-daemon'
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '9.6.0'
+
+      - name: Compile and test historical snapshot
+        run: ${{ steps.gradle.outputs.cmd }} testDebugUnitTest lintDebug assembleDebug

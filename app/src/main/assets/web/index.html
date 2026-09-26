@@ -1,0 +1,59 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#0b1020">
+<title>Blutooth Connector</title>
+<style>
+:root{font-family:system-ui,-apple-system,Segoe UI,sans-serif;color:#eef2ff;background:#080c18}
+*{box-sizing:border-box}body{margin:0;min-height:100vh;background:radial-gradient(circle at top,#17213e,#080c18 55%)}
+main{max-width:760px;margin:auto;padding:28px 18px 48px}
+h1{font-size:28px;margin:0 0 6px}.sub{color:#9ca8c7;margin-bottom:22px}
+.card{background:#11182b;border:1px solid #273252;border-radius:18px;padding:18px;margin:12px 0;box-shadow:0 10px 30px #0004}
+.status{white-space:pre-wrap;font-family:ui-monospace,monospace;color:#b8c7ff;min-height:80px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+button{width:100%;padding:13px 12px;border:0;border-radius:12px;background:#2e6bff;color:white;font-weight:650;font-size:14px}
+button.secondary{background:#202b49}button:active{transform:scale(.99)}
+small{color:#8491b0}
+</style>
+</head>
+<body>
+<main>
+  <h1>Blutooth Connector</h1>
+  <div class="sub">Multi-path device information and control plane</div>
+  <section class="card">
+    <div id="status" class="status">Connecting to native transport…</div>
+  </section>
+  <section class="card">
+    <div class="grid">
+      <button onclick="nativeCall('scan')">Scan paired</button>
+      <button onclick="nativeCall('connect')">Connect all</button>
+      <button onclick="nativeCall('ping')">PING all</button>
+      <button onclick="nativeCall('wifi')">Wi-Fi Direct</button>
+      <button class="secondary" onclick="nativeCall('wifiPeer')">Connect Wi-Fi peer</button>
+      <button class="secondary" onclick="refresh()">Refresh</button>
+    </div>
+  </section>
+  <section class="card">
+    <strong>Transport model</strong>
+    <p><small>Control plane: Bluetooth RFCOMM. Bulk plane: TCP over available local paths, including Wi-Fi Direct. Multipath scheduling remains path-aware rather than assuming that multiple logical interfaces automatically create independent RF capacity.</small></p>
+  </section>
+</main>
+<script>
+function setStatus(s){document.getElementById('status').textContent=s}
+function nativeCall(name){
+  if(!window.AndroidBridge){setStatus('Native bridge unavailable. Open this page inside the APK.');return}
+  try{
+    const r=AndroidBridge[name]();
+    if(r!==undefined && r!==null) setStatus(String(r));
+  }catch(e){setStatus('Native error: '+e)}
+}
+function refresh(){
+  if(!window.AndroidBridge){setStatus('Native bridge unavailable.');return}
+  try{setStatus(AndroidBridge.status())}catch(e){setStatus(String(e))}
+}
+window.addEventListener('load',refresh);
+</script>
+</body>
+</html>
