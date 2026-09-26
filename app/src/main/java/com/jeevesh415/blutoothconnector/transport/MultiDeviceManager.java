@@ -163,6 +163,41 @@ public final class MultiDeviceManager implements AutoCloseable {
                     throw new IllegalStateException("No bulk endpoint advertised");
                 }
 
+                // Prefer the native Bluetooth LE L2CAP CoC bulk plane. This keeps
+                // large transfers on Bluetooth instead of serializing them through
+                // the RFCOMM control stream. TCP/Wi-Fi paths remain an explicit
+                // fallback/aggregation path when L2CAP is unavailable.
+                BulkEndpointInfo bluetooth = null;
+                for (BulkEndpointInfo endpoint : endpoints) {
+                    if (BluetoothL2capBulkTransport.TRANSPORT.equals(
+                            endpoint.transport)
+                            && endpoint.psm > 0
+                            && endpoint.tokenBase64 != null
+                            && !endpoint.tokenBase64.isEmpty()) {
+                        bluetooth = endpoint;
+                        break;
+                    }
+                }
+
+                if (bluetooth != null) {
+                    byte[] token = BulkTransferProtocol.decodeToken(
+                            bluetooth.tokenBase64);
+                    try {
+                        long bytes = BluetoothL2capBulkTransport.send(
+                                session.device,
+                                bluetooth.psm,
+                                token,
+                                file);
+                        if (listener != null) listener.onComplete(session, bytes);
+                        return;
+                    } catch (Exception bluetoothError) {
+                        // Fall through to the existing adaptive local-network
+                        // multipath scheduler instead of losing the transfer.
+                    } finally {
+                        java.util.Arrays.fill(token, (byte) 0);
+                    }
+                }
+
                 long bytes = MultipathFileTransfer.send(
                         bulkContext, file, endpoints, 4);
                 if (listener != null) listener.onComplete(session, bytes);

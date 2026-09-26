@@ -30,6 +30,7 @@ import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.BulkTransferProtocol;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
+import com.jeevesh415.blutoothconnector.transport.BluetoothL2capBulkTransport;
 import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
 import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
 import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
@@ -57,6 +58,7 @@ public final class ConnectionService extends Service {
 
     private MultiDeviceManager peers;
     private TcpBulkEndpoint bulk;
+    private BluetoothL2capBulkTransport bluetoothBulk;
     private WifiDirectPathManager wifiDirect;
     private WifiAwarePathManager wifiAware;
     private RtcPeerManager rtc;
@@ -244,6 +246,15 @@ public final class ConnectionService extends Service {
         if (adapter == null) return;
 
         ensureBulkEndpoint();
+
+        bluetoothBulk = new BluetoothL2capBulkTransport(adapter);
+        bluetoothBulk.start(
+                new File(getFilesDir(), "transfers"),
+                new BluetoothL2capBulkTransport.Listener() {
+                    @Override public void onTransferComplete(File file) {}
+
+                    @Override public void onError(Exception error) {}
+                });
 
         peers = new MultiDeviceManager(
                 this,
@@ -776,6 +787,24 @@ public final class ConnectionService extends Service {
 
             JSONArray endpoints =
                     new JSONArray();
+
+            if (bluetoothBulk != null && bluetoothBulk.available()) {
+                byte[] bluetoothToken = bluetoothBulk.authorizationToken();
+                if (bluetoothToken != null) {
+                    endpoints.put(
+                            new JSONObject()
+                                    .put("host", "")
+                                    .put("port", -1)
+                                    .put("psm", bluetoothBulk.psm())
+                                    .put("token",
+                                            BulkTransferProtocol.encodeToken(
+                                                    bluetoothToken))
+                                    .put("transport",
+                                            BluetoothL2capBulkTransport.TRANSPORT));
+                    Arrays.fill(bluetoothToken, (byte) 0);
+                }
+            }
+
             if (bulk != null) {
                 for (TcpBulkEndpoint.Endpoint endpoint :
                         bulk.endpoints()) {
@@ -873,6 +902,9 @@ public final class ConnectionService extends Service {
         }
         if (bulk != null) {
             bulk.close();
+        }
+        if (bluetoothBulk != null) {
+            bluetoothBulk.close();
         }
 
         super.onDestroy();
