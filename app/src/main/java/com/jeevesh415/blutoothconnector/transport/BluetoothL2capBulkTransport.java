@@ -58,6 +58,8 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private final ExecutorService transferExecutor =
             Executors.newCachedThreadPool();
     private final SecureRandom random = new SecureRandom();
+    private final BluetoothThroughputOptimizer throughputOptimizer =
+            new BluetoothThroughputOptimizer();
 
     private volatile BluetoothServerSocket server;
     private volatile byte[] token;
@@ -130,14 +132,15 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         try (BluetoothSocket closeable = socket) {
             int packet = safePacketSize(
                     closeable.getMaxReceivePacketSize());
+            int pipeBuffer = throughputOptimizer.bufferBytes(packet);
             DataInputStream in = new DataInputStream(
                     new BufferedInputStream(
                             closeable.getInputStream(),
-                            Math.max(64 * 1024, packet * 32)));
+                            pipeBuffer));
             DataOutputStream out = new DataOutputStream(
                     new BufferedOutputStream(
                             closeable.getOutputStream(),
-                            64 * 1024));
+                            pipeBuffer));
 
             if (in.readInt() != MAGIC
                     || in.readInt() != VERSION) {
@@ -301,16 +304,17 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
             int packet = safePacketSize(
                     closeable.getMaxTransmitPacketSize());
+            int pipeBuffer = transferOptimizer.bufferBytes(packet);
             int writeQuantum = Math.max(16 * 1024, packet);
 
             DataInputStream in = new DataInputStream(
                     new BufferedInputStream(
                             closeable.getInputStream(),
-                            64 * 1024));
+                            pipeBuffer));
             DataOutputStream out = new DataOutputStream(
                     new BufferedOutputStream(
                             closeable.getOutputStream(),
-                            128 * 1024));
+                            pipeBuffer));
 
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
