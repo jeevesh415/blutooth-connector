@@ -389,8 +389,28 @@ public final class MainActivity extends Activity {
         footer.setPadding(4, 22, 4, 0);
         root.addView(footer);
 
-        scroll.addView(root);
-        setContentView(scroll);
+        android.widget.FrameLayout shell = new android.widget.FrameLayout(this);
+        shell.addView(scroll, new android.widget.FrameLayout.LayoutParams(-1, -1));
+
+        Button sensorCorner = new Button(this);
+        sensorCorner.setText("◈");
+        sensorCorner.setTextSize(20);
+        sensorCorner.setTextColor(textPrimary);
+        sensorCorner.setContentDescription("Open sensor control");
+        android.graphics.drawable.GradientDrawable sensorBg =
+                new android.graphics.drawable.GradientDrawable();
+        sensorBg.setShape(android.graphics.drawable.GradientDrawable.OVAL);
+        sensorBg.setColor(panel2);
+        sensorBg.setStroke(2, accent);
+        sensorCorner.setBackground(sensorBg);
+        sensorCorner.setOnClickListener(v -> openSensorControlPanel());
+
+        android.widget.FrameLayout.LayoutParams sensorLp =
+                new android.widget.FrameLayout.LayoutParams(62, 62, Gravity.TOP | Gravity.END);
+        sensorLp.setMargins(0, 18, 18, 0);
+        shell.addView(sensorCorner, sensorLp);
+
+        setContentView(shell);
     }
 
     private LinearLayout card(int color) {
@@ -448,6 +468,161 @@ public final class MainActivity extends Activity {
     }
 
     @android.annotation.SuppressLint("MissingPermission")
+    private void openSensorControlPanel() {
+        if (peers == null || peers.sessions().isEmpty()) {
+            updateStatus("Connect a peer first.");
+            return;
+        }
+
+        DeviceSession session = peers.sessions().iterator().next();
+        ReliableCommandClient client = commandClients.get(session.address());
+        if (client == null) {
+            attachCommandClient(session);
+            client = commandClients.get(session.address());
+        }
+        if (client == null) {
+            updateStatus("Sensor control channel is unavailable.");
+            return;
+        }
+
+        final ReliableCommandClient active = client;
+        active.execute(
+                session.nextSequence(),
+                "sensor.control",
+                "list",
+                null
+        ).whenComplete((frame, error) -> runOnUiThread(() -> {
+            if (error != null) {
+                updateStatus("Sensor inventory failed: " + safeError(error));
+                return;
+            }
+            try {
+                JSONObject result = frame.payload
+                        .optJSONObject("result");
+                if (result == null) result = frame.payload;
+                JSONArray sensors = result.optJSONArray("sensors");
+                if (sensors == null) throw new IllegalStateException("No sensor inventory");
+
+                LinearLayout panel = new LinearLayout(this);
+                panel.setOrientation(LinearLayout.VERTICAL);
+                panel.setPadding(24, 8, 24, 8);
+
+                TextView summary = new TextView(this);
+                summary.setText("Remote sensors: " + sensors.length()
+                        + "\\nAcquisition control uses Android's physical sensor limits.");
+                summary.setTextSize(14);
+                panel.addView(summary);
+
+                Button snapshot = compactButton("Read latest sensor state");
+                snapshot.setOnClickListener(v -> requestSensorSnapshot(session, active));
+                panel.addView(snapshot);
+
+                android.widget.ScrollView listScroll =
+                        new android.widget.ScrollView(this);
+                LinearLayout list = new LinearLayout(this);
+                list.setOrientation(LinearLayout.VERTICAL);
+
+                for (int i = 0; i < sensors.length(); i++) {
+                    JSONObject sensor = sensors.getJSONObject(i);
+                    int handle = sensor.getInt("handle");
+                    String name = sensor.optString("name", "Sensor");
+                    int minDelay = sensor.optInt("minDelayUs", 0);
+
+                    LinearLayout row = new LinearLayout(this);
+                    row.setOrientation(LinearLayout.HORIZONTAL);
+                    row.setGravity(Gravity.CENTER_VERTICAL);
+                    row.setPadding(0, 10, 0, 10);
+
+                    TextView label = new TextView(this);
+                    label.setText(name + "\\nmin " + minDelay + " µs");
+                    label.setTextSize(13);
+                    label.setLayoutParams(new LinearLayout.LayoutParams(
+                            0, -2, 1f));
+
+                    Button configure = compactButton("Tune");
+                    configure.setOnClickListener(v ->
+                            configureRemoteSensor(session, active, handle, name, minDelay));
+
+                    row.addView(label);
+                    row.addView(configure);
+                    list.addView(row);
+                }
+
+                listScroll.addView(list);
+                panel.addView(listScroll, new LinearLayout.LayoutParams(-1, 420));
+
+                new android.app.AlertDialog.Builder(this)
+                        .setTitle("SENSOR CONTROL  •  " + safeName(session.device))
+                        .setView(panel)
+                        .setNegativeButton("Close", null)
+                        .show();
+            } catch (Exception parseError) {
+                updateStatus("Sensor panel error: " + safeError(parseError));
+            }
+        }));
+    }
+
+    private void configureRemoteSensor(
+            DeviceSession session,
+            ReliableCommandClient client,
+            int handle,
+            String name,
+            int minDelayUs) {
+        final android.widget.EditText input = new android.widget.EditText(this);
+        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER
+                | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        input.setHint("Sampling rate in Hz");
+
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Tune " + name)
+                .setMessage("Effective rate is bounded by the physical sensor and Android.")
+                .setView(input)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Apply", (dialog, which) -> {
+                    try {
+                        double hz = Double.parseDouble(input.getText().toString());
+                        if (!(hz > 0) || hz > 10000) throw new IllegalArgumentException("Rate must be 0 < Hz ≤ 10000");
+                        int requestedPeriodUs = (int) Math.max(
+                                1, Math.round(1_000_000.0 / hz));
+                        JSONObject payload = new JSONObject()
+                                .put("handle", handle)
+                                .put("periodUs", requestedPeriodUs)
+                                .put("maxReportLatencyUs", 0);
+                        client.execute(
+                                session.nextSequence(),
+                                "sensor.control",
+                                "configure",
+                                payload
+                        ).whenComplete((frame, error) -> runOnUiThread(() ->
+                                updateStatus(error == null
+                                        ? "Sensor configured: " + name + " → " + hz + " Hz"
+                                        : "Sensor tuning failed: " + safeError(error))));
+                    } catch (Exception error) {
+                        updateStatus("Invalid sensor rate: " + safeError(error));
+                    }
+                })
+                .show();
+    }
+
+    private void requestSensorSnapshot(
+            DeviceSession session,
+            ReliableCommandClient client) {
+        client.execute(
+                session.nextSequence(),
+                "sensor.control",
+                "snapshot",
+                null
+        ).whenComplete((frame, error) -> runOnUiThread(() -> {
+            if (error != null) {
+                updateStatus("Sensor snapshot failed: " + safeError(error));
+            } else {
+                updateStatus("Sensor snapshot from "
+                        + safeName(session.device) + ": "
+                        + frame.payload.toString());
+            }
+        }));
+    }
+
     private void inspectBluetooth() {
         if (Build.VERSION.SDK_INT >= 31
                 && checkSelfPermission(Manifest.permission.BLUETOOTH_CONNECT)
