@@ -388,6 +388,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             }
 
             out.flush();
+            transferOptimizer.observe(
+                    file.length(),
+                    Math.max(1L, System.nanoTime() - transferStartedNanos));
             int status = in.readInt();
             if (status != 0) {
                 throw new IOException(
