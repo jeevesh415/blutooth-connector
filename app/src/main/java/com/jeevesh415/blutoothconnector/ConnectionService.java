@@ -22,6 +22,7 @@ import com.jeevesh415.blutoothconnector.capability.RemoteControlCapability;
 import com.jeevesh415.blutoothconnector.capability.AppControlCapability;
 import com.jeevesh415.blutoothconnector.capability.DevicePolicyCapability;
 import com.jeevesh415.blutoothconnector.capability.UiInspectCapability;
+import com.jeevesh415.blutoothconnector.capability.SensorControlCapability;
 import com.jeevesh415.blutoothconnector.protocol.CommandRouter;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
@@ -240,6 +241,7 @@ public final class ConnectionService extends Service {
         registry.register(new AppControlCapability(this));
         registry.register(new DevicePolicyCapability(this));
         registry.register(new UiInspectCapability());
+        registry.register(new SensorControlCapability(this));
 
         BluetoothAdapter adapter =
                 BluetoothAdapter.getDefaultAdapter();
