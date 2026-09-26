@@ -27,6 +27,7 @@ import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
 
+import org.json.JSONArray;
 import org.json.JSONObject;
 
 import java.io.File;
