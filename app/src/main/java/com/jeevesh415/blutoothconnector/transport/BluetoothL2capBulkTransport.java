@@ -293,6 +293,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
         BluetoothSocket socket =
                 device.createL2capChannel(remotePsm);
+        final long transferStartedNanos = System.nanoTime();
+        final BluetoothThroughputOptimizer transferOptimizer =
+                new BluetoothThroughputOptimizer();
         try (BluetoothSocket closeable = socket) {
             closeable.connect();
 
