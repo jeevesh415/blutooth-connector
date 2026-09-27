@@ -32,4 +32,4 @@ jobs:
         run: lean formal/BlutoothConnectorFormalProof.lean
 
       - name: Type-check concrete refinement
-        run: lean -I formal formal/BlutoothConnectorRefinement.lean
+        run: cd formal && lean BlutoothConnectorRefinement.lean
