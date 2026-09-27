@@ -35,4 +35,7 @@ jobs:
         run: cd formal && lean -o BlutoothConnectorFormalProof.olean BlutoothConnectorFormalProof.lean
 
       - name: Type-check concrete refinement
-        run: cd formal && lean BlutoothConnectorRefinement.lean
+        run: |
+          tail -n +2 formal/BlutoothConnectorRefinement.lean > /tmp/refinement_body.lean
+          cat formal/BlutoothConnectorFormalProof.lean /tmp/refinement_body.lean > /tmp/blutooth_all_formal.lean
+          lean /tmp/blutooth_all_formal.lean
