@@ -97,7 +97,8 @@ public final class SensorFusionEngine {
         out.put("rollDeg", euler[0]);
         out.put("pitchDeg", euler[1]);
         out.put("yawDeg", euler[2]);
-        out.put("accelerationNormMps2", accelNorm);
+        out.put("accelerationNormMps2",
+                Double.isNaN(accelNorm) ? JSONObject.NULL : accelNorm);
         out.put("gravityErrorMps2",
                 Double.isNaN(accelNorm) ? JSONObject.NULL : accelNorm - GRAVITY);
         out.put("usedAccelerometer", haveAccel);
