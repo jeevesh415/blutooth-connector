@@ -109,12 +109,10 @@ public final class SensorControlCapability implements Capability {
 
     private JSONArray directChannelTypes(Sensor sensor) {
         JSONArray out = new JSONArray();
-        int mask = sensor.getHighestDirectReportRateLevel();
-        if (mask != SensorDirectRate.UNKNOWN) {
-            if ((mask & SensorDirectRate.NORMAL) != 0) out.put("normal");
-            if ((mask & SensorDirectRate.FAST) != 0) out.put("fast");
-            if ((mask & SensorDirectRate.VERY_FAST) != 0) out.put("very_fast");
-        }
+        int maxRate = sensor.getHighestDirectReportRateLevel();
+        if (maxRate >= SensorDirectRate.NORMAL) out.put("normal");
+        if (maxRate >= SensorDirectRate.FAST) out.put("fast");
+        if (maxRate >= SensorDirectRate.VERY_FAST) out.put("very_fast");
         return out;
     }
 
