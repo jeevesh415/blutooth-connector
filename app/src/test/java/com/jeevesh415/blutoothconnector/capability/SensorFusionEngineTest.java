@@ -11,7 +11,7 @@ import static org.junit.Assert.assertTrue;
 public final class SensorFusionEngineTest {
     private static final double G = 9.80665;
 
-    @Test public void initialStateIsUnavailable() {
+    @Test public void initialStateIsUnavailable() throws Exception {
         SensorFusionEngine engine = new SensorFusionEngine();
 
         JSONObject snapshot = engine.snapshot();
@@ -19,7 +19,7 @@ public final class SensorFusionEngineTest {
         assertTrue(!snapshot.optBoolean("available", true));
     }
 
-    @Test public void gravityAndMagnetometerGiveStableReference() {
+    @Test public void gravityAndMagnetometerGiveStableReference() throws Exception {
         SensorFusionEngine engine = new SensorFusionEngine();
 
         engine.onSample(
@@ -38,7 +38,7 @@ public final class SensorFusionEngineTest {
         assertEquals(0.0, snapshot.optDouble("pitchDeg"), 0.5);
     }
 
-    @Test public void quaternionRemainsNormalizedDuringGyroPropagation() {
+    @Test public void quaternionRemainsNormalizedDuringGyroPropagation() throws Exception {
         SensorFusionEngine engine = new SensorFusionEngine();
 
         engine.onSample(
