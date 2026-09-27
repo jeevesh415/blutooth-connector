@@ -23,7 +23,7 @@ The remote capability calls SensorManager.getSensorList(Sensor.TYPE_ALL), so it 
 
 Each sensor advertises:
 
-- stable Android sensor handle
+- stable app-level sensor handle (using the Android sensor ID when valid, with a collision-resistant fallback when Android reports an unusable ID)
 - sensor type/name/vendor/version
 - resolution and maximum range
 - minimum delay
@@ -31,7 +31,7 @@ Each sensor advertises:
 - wake-up property
 - reporting mode
 - dynamic-sensor status
-- direct-report rate information
+- direct-report rate information and supported shared-memory channel types
 - whether normal listener streaming is supported
 
 Trigger-only sensors are identified rather than incorrectly treated as continuous streams.
@@ -50,7 +50,7 @@ Accelerometer and magnetometer data provide a slower reference estimate. The fus
 - when acceleration departs strongly from g, correction is reduced to avoid treating translation as tilt;
 - magnetometer data supplies heading correction when a valid horizontal magnetic vector exists.
 
-This gives a lightweight complementary estimator with quaternion state, without requiring a native dependency.
+This gives a lightweight complementary estimator with quaternion state, without requiring a native dependency. It is deliberately not presented as an EKF/UKF: the current estimator is a deterministic adaptive complementary filter, which keeps CPU cost low on Phone B.
 
 ## Maximum-rate behavior
 
@@ -85,7 +85,7 @@ The project should treat these as separate deployment profiles rather than assum
 
 Sensor acquisition and transport are decoupled. The Bluetooth throughput optimizer adapts host-side buffering from measured bandwidth and RTT using a bandwidth-delay-product model while respecting the negotiated radio/controller capabilities.
 
-For very high-rate telemetry, the next transport evolution should be a compact binary sensor stream on the existing bulk/L2CAP path instead of JSON-per-sample messages. The current command channel is intentionally retained for low-rate control, discovery, configuration, and snapshots.
+Android's SensorDirectChannel API is also inventoried when the hardware exposes it; the current implementation reports direct-channel capability but keeps acquisition on SensorEventListener so the control plane remains portable across supported devices. For very high-rate telemetry, the next transport evolution should be a compact binary sensor stream on the existing bulk/L2CAP path, with a direct-channel ingestion path where hardware-buffer/memory-file support is available, instead of JSON-per-sample messages. The current command channel is intentionally retained for low-rate control, discovery, configuration, and snapshots.
 
 ## UI principle
 
