@@ -1,4 +1,4 @@
-import formal.BlutoothConnectorFormalProof
+import BlutoothConnectorFormalProof
 
 namespace BlutoothConnectorRefinement
 
