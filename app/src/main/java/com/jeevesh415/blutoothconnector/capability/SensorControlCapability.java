@@ -29,6 +29,8 @@ public final class SensorControlCapability implements Capability {
     private final SensorManager manager;
     private final Map<Integer, SensorSample> latest = new ConcurrentHashMap<>();
     private final Map<Integer, SensorEventListener> listeners = new ConcurrentHashMap<>();
+    private final Map<Integer, android.hardware.TriggerEventListener> triggerListeners =
+            new ConcurrentHashMap<>();
     private final SensorFusionEngine fusion = new SensorFusionEngine();
 
     public SensorControlCapability(Context context) {
@@ -51,6 +53,7 @@ public final class SensorControlCapability implements Capability {
                 || "configure".equals(op)
                 || "optimize".equals(op)
                 || "fusion".equals(op)
+                || "trigger".equals(op)
                 || "stop".equals(op);
     }
 
@@ -67,6 +70,8 @@ public final class SensorControlCapability implements Capability {
             result = optimize();
         } else if ("fusion".equals(operation)) {
             result = fusion.snapshot();
+        } else if ("trigger".equals(operation)) {
+            result = trigger(command.payload);
         } else {
             result = stop(command.payload);
         }
@@ -148,6 +153,49 @@ public final class SensorControlCapability implements Capability {
      * Request the lowest Android-reported period for every streamable sensor.
      * The sensor HAL is still free to clamp/coalesce deliveries.
      */
+    private JSONObject trigger(JSONObject p) throws Exception {
+        int handle = p.optInt("handle", -1);
+        Sensor sensor = find(handle);
+        if (sensor == null) throw new IllegalArgumentException("Unknown sensor handle");
+
+        int mode = sensor.getReportingMode();
+        if (mode != Sensor.REPORTING_MODE_ONE_SHOT
+                && mode != Sensor.REPORTING_MODE_SPECIAL_TRIGGER) {
+            throw new IllegalArgumentException("Sensor is not a trigger-only sensor");
+        }
+
+        cancelTrigger(handle);
+        android.hardware.TriggerEventListener listener =
+                new android.hardware.TriggerEventListener() {
+                    @Override public void onTrigger(android.hardware.TriggerEvent event) {
+                        float[] values = new float[event.values.length];
+                        System.arraycopy(event.values, 0, values, 0, event.values.length);
+                        SensorSample sample = new SensorSample(
+                                event.sensor.getId(),
+                                event.sensor.getType(),
+                                event.timestamp,
+                                -1,
+                                values);
+                        latest.put(event.sensor.getId(), sample);
+                        if (values.length >= 3) {
+                            fusion.onSample(event.sensor.getType(), event.timestamp, values);
+                        }
+                        triggerListeners.remove(event.sensor.getId());
+                    }
+                };
+
+        if (!manager.requestTriggerSensor(listener, sensor)) {
+            throw new IllegalStateException("Trigger registration rejected");
+        }
+        triggerListeners.put(handle, listener);
+
+        return new JSONObject()
+                .put("handle", handle)
+                .put("name", sensor.getName())
+                .put("triggered", false)
+                .put("armed", true);
+    }
+
     private JSONObject optimize() {
         int started = 0;
         int skipped = 0;
@@ -246,7 +294,17 @@ public final class SensorControlCapability implements Capability {
     private void stopSensor(int id) {
         SensorEventListener listener = listeners.remove(id);
         if (listener != null) manager.unregisterListener(listener);
+        cancelTrigger(id);
         latest.remove(id);
+    }
+
+    private void cancelTrigger(int id) {
+        android.hardware.TriggerEventListener listener = triggerListeners.remove(id);
+        if (listener == null) return;
+        Sensor sensor = find(id);
+        if (sensor != null) {
+            manager.cancelTriggerSensor(listener, sensor);
+        }
     }
 
     private Sensor find(int id) {
