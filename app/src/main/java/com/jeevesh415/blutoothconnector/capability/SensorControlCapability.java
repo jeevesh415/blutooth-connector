@@ -42,7 +42,7 @@ public final class SensorControlCapability implements Capability {
     }
 
     @Override public String id() { return "sensor.control"; }
-    @Override public String version() { return "2.0"; }
+    @Override public String version() { return "2.1"; }
     @Override public boolean requiresExplicitAuthorization() { return true; }
 
     @Override public boolean canHandle(Frame command) {
@@ -92,7 +92,8 @@ public final class SensorControlCapability implements Capability {
         List<Sensor> all = manager.getSensorList(Sensor.TYPE_ALL);
         for (Sensor s : all) {
             sensors.put(new JSONObject()
-                    .put("handle", s.getId())
+                    .put("handle", handleFor(s))
+                    .put("androidId", s.getId())
                     .put("type", s.getType())
                     .put("name", s.getName())
                     .put("vendor", s.getVendor())
@@ -104,7 +105,11 @@ public final class SensorControlCapability implements Capability {
                     .put("wakeUp", s.isWakeUpSensor())
                     .put("reportingMode", s.getReportingMode())
                     .put("dynamic", s.isDynamicSensor())
-                    .put("stringType", s.getStringType())\n                    .put("maxDelayUs", Math.max(0, s.getMaxDelay()))\n                    .put("fifoMaxEventCount", s.getFifoMaxEventCount())\n                    .put("fifoReservedEventCount", s.getFifoReservedEventCount())\n                    .put("directChannelTypes", directChannelTypes(s))
+                    .put("stringType", s.getStringType())
+                    .put("maxDelayUs", Math.max(0, s.getMaxDelay()))
+                    .put("fifoMaxEventCount", s.getFifoMaxEventCount())
+                    .put("fifoReservedEventCount", s.getFifoReservedEventCount())
+                    .put("directChannelTypes", directChannelTypes(s))
                     .put("streamable",
                             s.getReportingMode() == Sensor.REPORTING_MODE_CONTINUOUS
                                     || s.getReportingMode() == Sensor.REPORTING_MODE_ON_CHANGE));
@@ -121,6 +126,14 @@ public final class SensorControlCapability implements Capability {
         if (maxRate >= SensorDirectRate.NORMAL) out.put("normal");
         if (maxRate >= SensorDirectRate.FAST) out.put("fast");
         if (maxRate >= SensorDirectRate.VERY_FAST) out.put("very_fast");
+        if (sensor.isDirectChannelTypeSupported(
+                android.hardware.SensorDirectChannel.TYPE_MEMORY_FILE)) {
+            out.put("memory_file");
+        }
+        if (sensor.isDirectChannelTypeSupported(
+                android.hardware.SensorDirectChannel.TYPE_HARDWARE_BUFFER)) {
+            out.put("hardware_buffer");
+        }
         return out;
     }
 
@@ -158,7 +171,7 @@ public final class SensorControlCapability implements Capability {
      */
     private JSONObject trigger(JSONObject p) throws Exception {
         int handle = p.optInt("handle", -1);
-        Sensor sensor = find(handle);
+        Sensor sensor = findByHandle(handle);
         if (sensor == null) throw new IllegalArgumentException("Unknown sensor handle");
 
         int mode = sensor.getReportingMode();
@@ -179,11 +192,11 @@ public final class SensorControlCapability implements Capability {
                                 event.timestamp,
                                 -1,
                                 values);
-                        latest.put(event.sensor.getId(), sample);
+                        latest.put(handleFor(event.sensor), sample);
                         if (values.length >= 3) {
                             fusion.onSample(event.sensor.getType(), event.timestamp, values);
                         }
-                        triggerListeners.remove(event.sensor.getId());
+                        triggerListeners.remove(handleFor(event.sensor));
                     }
                 };
 
@@ -226,7 +239,8 @@ public final class SensorControlCapability implements Capability {
     }
 
     private void register(Sensor sensor, int periodUs, int maxLatencyUs) {
-        stopSensor(sensor.getId());
+        int handle = handleFor(sensor);
+        stopSensor(handle);
 
         SensorEventListener listener = new SensorEventListener() {
             @Override public void onSensorChanged(SensorEvent event) {
@@ -253,7 +267,7 @@ public final class SensorControlCapability implements Capability {
         boolean registered = manager.registerListener(
                 listener, sensor, periodUs, maxLatencyUs);
         if (!registered) throw new IllegalStateException("Sensor registration rejected");
-        listeners.put(sensor.getId(), listener);
+        listeners.put(handle, listener);
     }
 
     private JSONObject snapshot() {
@@ -312,11 +326,29 @@ public final class SensorControlCapability implements Capability {
         }
     }
 
-    private Sensor find(int id) {
+    private Sensor findByHandle(int handle) {
+        if (handle <= 0) return null;
         for (Sensor sensor : manager.getSensorList(Sensor.TYPE_ALL)) {
-            if (sensor.getId() == id) return sensor;
+            if (handleFor(sensor) == handle) return sensor;
         }
         return null;
+    }
+
+    private int handleFor(Sensor sensor) {
+        int androidId = sensor.getId();
+        if (androidId > 0) return androidId;
+
+        String key = sensor.getType() + "|" + sensor.getStringType() + "|"
+                + sensor.getName() + "|" + sensor.getVendor() + "|" + sensor.getVersion();
+        Integer existing = fallbackHandles.get(key);
+        if (existing != null) return existing;
+
+        int candidate = nextFallbackHandle.getAndIncrement();
+        if (candidate <= 0) {
+            throw new IllegalStateException("Sensor handle space exhausted");
+        }
+        Integer raced = fallbackHandles.putIfAbsent(key, candidate);
+        return raced == null ? candidate : raced;
     }
 
     private static final class SensorSample {
