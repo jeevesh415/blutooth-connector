@@ -110,9 +110,10 @@ theorem accepted_replay_strictly_advances
     (highest incoming : Nat)
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
-  have hp : 0 < incoming ∧ highest < incoming := h
-  simp [nextHighest, hp]
-  exact hp.2
+  unfold AcceptsReplay at h
+  unfold nextHighest
+  rw [if_pos h]
+  exact h.2
 
 theorem zero_sequence_is_rejected
     (highest : Nat) :
@@ -128,9 +129,12 @@ theorem stale_sequence_is_rejected
 theorem replay_state_never_moves_backward
     (highest incoming : Nat) :
     highest ≤ nextHighest highest incoming := by
+  unfold nextHighest
   by_cases h : 0 < incoming ∧ highest < incoming
-  · simp [nextHighest, h, Nat.le_of_lt h.2]
-  · simp [nextHighest, h]
+  · rw [if_pos h]
+    exact Nat.le_of_lt h.2
+  · rw [if_neg h]
+    exact Nat.le_refl highest
 
 
 /-! --------------------------------------------------------------------------
