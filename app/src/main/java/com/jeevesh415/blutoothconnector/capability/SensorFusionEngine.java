@@ -3,6 +3,7 @@ package com.jeevesh415.blutoothconnector.capability;
 import android.hardware.Sensor;
 
 import org.json.JSONArray;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 import java.util.Arrays;
@@ -81,7 +82,7 @@ public final class SensorFusionEngine {
         }
     }
 
-    public synchronized JSONObject snapshot() {
+    public synchronized JSONObject snapshot() throws JSONException {
         double[] euler = toEuler(q);
         double accelNorm = haveAccel
                 ? Math.sqrt(accel[0] * accel[0]
@@ -279,13 +280,13 @@ public final class SensorFusionEngine {
         normalize(target);
     }
 
-    private static JSONArray array(float[] values) {
+    private static JSONArray array(float[] values) throws JSONException {
         JSONArray out = new JSONArray();
         for (float value : values) out.put(value);
         return out;
     }
 
-    private static JSONArray array(double[] values) {
+    private static JSONArray array(double[] values) throws JSONException {
         JSONArray out = new JSONArray();
         for (double value : values) out.put(value);
         return out;
