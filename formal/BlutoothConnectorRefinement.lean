@@ -43,6 +43,8 @@ theorem java_highest_refines
     javaHighest highest incoming = nextHighest highest incoming := by
   have hr : AcceptsReplay highest incoming :=
     (java_accept_iff highest incoming).mp h
+  letI : Decidable (AcceptsReplay highest incoming) :=
+    Classical.propDecidable _
   change
     (if javaAccept highest incoming then incoming else highest) =
       (if AcceptsReplay highest incoming then incoming else highest)
