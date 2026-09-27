@@ -252,7 +252,7 @@ public final class SensorControlCapability implements Capability {
                         event.timestamp,
                         event.accuracy,
                         values);
-                latest.put(event.sensor.getId(), sample);
+                latest.put(handleFor(event.sensor), sample);
                 if (event.values.length >= 3) {
                     fusion.onSample(
                             event.sensor.getType(),
