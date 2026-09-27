@@ -1,0 +1,32 @@
+name: Lean Formal Verification
+
+on:
+  push:
+    paths:
+      - "formal/**"
+      - "lean-toolchain"
+      - ".github/workflows/lean-formal.yml"
+  pull_request:
+    paths:
+      - "formal/**"
+      - "lean-toolchain"
+      - ".github/workflows/lean-formal.yml"
+
+jobs:
+  formal-proof:
+    name: Type-check Lean repository proof
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install elan
+        run: |
+          curl -sSfL https://elan.lean-lang.org/elan-init.sh | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Check Lean version
+        run: lean --version
+
+      - name: Type-check formal proof
+        run: lean formal/BlutoothConnectorFormalProof.lean
