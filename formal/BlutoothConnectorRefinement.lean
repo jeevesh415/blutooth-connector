@@ -47,6 +47,7 @@ theorem java_highest_refines
     simp [nextHighest, hcond]
   unfold javaHighest
   rw [h, hnext]
+  rfl
 
 /-! Frame.java -/
 
