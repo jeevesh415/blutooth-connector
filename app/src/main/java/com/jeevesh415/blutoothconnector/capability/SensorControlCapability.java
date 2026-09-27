@@ -278,7 +278,9 @@ public final class SensorControlCapability implements Capability {
     private JSONObject stop(JSONObject p) {
         int handle = p.optInt("handle", -1);
         if (handle < 0) {
-            for (Integer id : listeners.keySet()) stopSensor(id);
+            java.util.HashSet<Integer> ids = new java.util.HashSet<>(listeners.keySet());
+            ids.addAll(triggerListeners.keySet());
+            for (Integer id : ids) stopSensor(id);
             fusion.reset();
             return new JSONObject()
                     .put("stopped", "all")
