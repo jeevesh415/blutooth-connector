@@ -82,6 +82,14 @@ public final class SensorFusionEngine {
         }
     }
 
+    synchronized double[] quaternionCopy() {
+        return q.clone();
+    }
+
+    synchronized double[] eulerDegreesCopy() {
+        return toEuler(q);
+    }
+
     public synchronized JSONObject snapshot() throws JSONException {
         double[] euler = toEuler(q);
         double accelNorm = haveAccel
