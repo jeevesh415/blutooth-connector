@@ -32,7 +32,7 @@ jobs:
         run: lean formal/BlutoothConnectorFormalProof.lean
 
       - name: Build formal proof module
-        run: lean -o formal/BlutoothConnectorFormalProof.olean formal/BlutoothConnectorFormalProof.lean
+        run: cd formal && lean -o BlutoothConnectorFormalProof.olean BlutoothConnectorFormalProof.lean
 
       - name: Type-check concrete refinement
-        run: lean formal/BlutoothConnectorRefinement.lean
+        run: cd formal && lean BlutoothConnectorRefinement.lean
