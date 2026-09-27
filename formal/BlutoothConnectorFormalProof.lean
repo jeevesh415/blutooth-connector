@@ -104,13 +104,13 @@ def AcceptsReplay (highest incoming : Nat) : Prop :=
   0 < incoming ∧ highest < incoming
 
 def nextHighest (highest incoming : Nat) : Nat :=
-  if AcceptsReplay highest incoming then incoming else highest
+  if 0 < incoming ∧ highest < incoming then incoming else highest
 
 theorem accepted_replay_strictly_advances
     (highest incoming : Nat)
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
-  simp [nextHighest, h]
+  simp [nextHighest, AcceptsReplay, h]
   exact h.2
 
 theorem zero_sequence_is_rejected
@@ -127,10 +127,11 @@ theorem stale_sequence_is_rejected
 theorem replay_state_never_moves_backward
     (highest incoming : Nat) :
     highest ≤ nextHighest highest incoming := by
-  by_cases h : AcceptsReplay highest incoming
-  · simp [nextHighest, h]
+  unfold nextHighest
+  by_cases h : 0 < incoming ∧ highest < incoming
+  · simp [h]
     exact h.2.le
-  · simp [nextHighest, h]
+  · simp [h]
 
 /-! --------------------------------------------------------------------------
   4. Command deduplication capacity
@@ -278,13 +279,16 @@ theorem valid_chunk_index_is_admissible
   BitSet membership is modeled by Finset membership.
   -------------------------------------------------------------------------- -/
 
-def markSeen (seen : Finset Nat) (index : Nat) : Finset Nat :=
-  insert index seen
+def Seen : Type := Nat → Bool
+
+def markSeen (seen : Seen) (index : Nat) : Seen :=
+  fun j => if j = index then true else seen j
 
 theorem duplicate_chunk_mark_is_idempotent
-    (seen : Finset Nat) (index : Nat) :
+    (seen : Seen) (index : Nat) :
     markSeen (markSeen seen index) index = markSeen seen index := by
-  simp [markSeen]
+  funext j
+  by_cases h : j = index <;> simp [markSeen, h]
 
 /-! --------------------------------------------------------------------------
   10. Resume semantics
@@ -307,7 +311,7 @@ theorem resume_offset_never_exceeds_file
   -------------------------------------------------------------------------- -/
 
 def clampNat (lo hi x : Nat) : Nat :=
-  min hi (max lo x)
+  if hi < x then hi else if x < lo then lo else x
 
 def hostBufferTarget (packet bdp : Nat) : Nat :=
   clampNat minBufferBytes maxBufferBytes
@@ -316,8 +320,17 @@ def hostBufferTarget (packet bdp : Nat) : Nat :=
 theorem host_buffer_has_lower_bound
     (packet bdp : Nat) :
     minBufferBytes ≤ hostBufferTarget packet bdp := by
+  have hbounds : minBufferBytes ≤ maxBufferBytes := by decide
   unfold hostBufferTarget clampNat
-  omega
+  by_cases h₁ : maxBufferBytes <
+      max (4 * packet) (4 * bdp)
+  · simp [h₁]
+    exact hbounds
+  · by_cases h₂ :
+        max (4 * packet) (4 * bdp) < minBufferBytes
+    · simp [h₁, h₂]
+    · simp [h₁, h₂]
+      omega
 
 theorem host_buffer_has_upper_bound
     (packet bdp : Nat) :
@@ -375,12 +388,14 @@ theorem canonical_pair_is_symmetric
   -------------------------------------------------------------------------- -/
 
 def GcmRoundTrip
-    (encrypt decrypt : List UInt8 → List UInt8 → List UInt8) : Prop :=
+    (encrypt decrypt :
+      List UInt8 → List UInt8 → List UInt8 → List UInt8) : Prop :=
   ∀ key aad plaintext,
     decrypt key aad (encrypt key aad plaintext) = plaintext
 
 theorem gcm_round_trip_follows_from_verified_primitive
-    (encrypt decrypt : List UInt8 → List UInt8 → List UInt8)
+    (encrypt decrypt :
+      List UInt8 → List UInt8 → List UInt8 → List UInt8)
     (h : GcmRoundTrip encrypt decrypt)
     (key aad plaintext : List UInt8) :
     decrypt key aad (encrypt key aad plaintext) = plaintext :=
