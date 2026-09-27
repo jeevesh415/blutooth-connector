@@ -110,8 +110,9 @@ theorem accepted_replay_strictly_advances
     (highest incoming : Nat)
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
-  simp [AcceptsReplay, nextHighest] at h ⊢
-  exact h.2
+  have hp : 0 < incoming ∧ highest < incoming := h
+  simp [nextHighest, hp]
+  exact hp.2
 
 theorem zero_sequence_is_rejected
     (highest : Nat) :
@@ -127,12 +128,9 @@ theorem stale_sequence_is_rejected
 theorem replay_state_never_moves_backward
     (highest incoming : Nat) :
     highest ≤ nextHighest highest incoming := by
-  unfold nextHighest
   by_cases h : 0 < incoming ∧ highest < incoming
-  · rw [ite_eq_left h]
-    exact Nat.le_of_lt h.2
-  · rw [ite_eq_right h]
-    exact Nat.le_refl highest
+  · simp [nextHighest, h, Nat.le_of_lt h.2]
+  · simp [nextHighest, h]
 
 
 /-! --------------------------------------------------------------------------
@@ -497,18 +495,15 @@ structure AllocationContract where
 
 theorem allocation_share_is_bounded
     (c : AllocationContract) (s : Share) (hs : s ∈ c.shares) :
-    Share.numerator s ≤ c.denominator := by
-  cases c with
-  | mk shares denominator conservation bounded =>
-      exact bounded s
+    Share.numerator s ≤ AllocationContract.denominator c := by
+  exact AllocationContract.bounded c s
 
 theorem allocation_conserves_work
     (c : AllocationContract) :
-    List.foldl (fun acc s => acc + Share.numerator s) 0 c.shares =
-      c.denominator := by
-  cases c with
-  | mk shares denominator conservation bounded =>
-      exact conservation
+    List.foldl (fun acc s => acc + Share.numerator s) 0
+      (AllocationContract.shares c) =
+      AllocationContract.denominator c := by
+  exact AllocationContract.conservation c
 
 /-! --------------------------------------------------------------------------
   19. Network path selection
