@@ -111,9 +111,7 @@ theorem accepted_replay_strictly_advances
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
   unfold AcceptsReplay at h
-  unfold nextHighest
-  rw [if_pos h]
-  exact h.2
+  simpa [nextHighest, h] using h.2
 
 theorem zero_sequence_is_rejected
     (highest : Nat) :
@@ -131,10 +129,8 @@ theorem replay_state_never_moves_backward
     highest ≤ nextHighest highest incoming := by
   unfold nextHighest
   by_cases h : 0 < incoming ∧ highest < incoming
-  · rw [if_pos h]
-    exact Nat.le_of_lt h.2
-  · rw [if_neg h]
-    exact Nat.le_refl highest
+  · simpa [h] using Nat.le_of_lt h.2
+  · simp [h]
 
 
 /-! --------------------------------------------------------------------------
@@ -463,7 +459,9 @@ theorem deterministic_iv_is_functional
     (a b : String) (i j : Nat)
     (h₁ : a = b) (h₂ : i = j) :
     deterministicIV a i = deterministicIV b j := by
-  simpa [h₁, h₂]
+  subst b
+  subst j
+  rfl
 
 /-! --------------------------------------------------------------------------
   17. Integrity semantics
@@ -498,7 +496,7 @@ structure AllocationContract where
     ∀ s : Share, s.numerator ≤ denominator
 
 theorem allocation_share_is_bounded
-    (c : AllocationContract) (s : Share) (hs : s ∈ c.shares) :
+    (c : AllocationContract) (s : Share) :
     Share.numerator s ≤ AllocationContract.denominator c := by
   exact AllocationContract.bounded c s
 
