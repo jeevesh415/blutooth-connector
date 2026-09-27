@@ -646,15 +646,20 @@ public final class MainActivity extends Activity {
             ReliableCommandClient client,
             int handle,
             String name) {
-        client.execute(
-                session.nextSequence(),
-                "sensor.control",
-                "trigger",
-                new JSONObject().put("handle", handle)
-        ).whenComplete((frame, error) -> runOnUiThread(() ->
-                updateStatus(error == null
-                        ? "Trigger armed for " + name + "."
-                        : "Trigger failed: " + safeError(error))));
+        try {
+            JSONObject payload = new JSONObject().put("handle", handle);
+            client.execute(
+                    session.nextSequence(),
+                    "sensor.control",
+                    "trigger",
+                    payload
+            ).whenComplete((frame, error) -> runOnUiThread(() ->
+                    updateStatus(error == null
+                            ? "Trigger armed for " + name + "."
+                            : "Trigger failed: " + safeError(error))));
+        } catch (org.json.JSONException error) {
+            updateStatus("Could not prepare trigger: " + safeError(error));
+        }
     }
 
     private void configureRemoteSensor(
