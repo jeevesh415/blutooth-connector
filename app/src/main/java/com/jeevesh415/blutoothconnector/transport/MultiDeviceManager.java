@@ -42,6 +42,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     }
 
     private final BluetoothTransport transport;
+    private final BluetoothCapabilityProfile bluetoothCapabilities;
     private final Context bulkContext;
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, BluetoothDevice> knownDevices = new ConcurrentHashMap<>();
@@ -61,6 +62,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
     public MultiDeviceManager(Context context, BluetoothAdapter adapter, Listener listener) {
         if (adapter == null) throw new IllegalArgumentException("Bluetooth adapter");
+        this.bluetoothCapabilities = BluetoothCapabilityProfile.fromAdapter(adapter);
         if (listener != null) listeners.add(listener);
         this.bulkContext = context == null ? null : context.getApplicationContext();
 
@@ -331,6 +333,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
             JSONObject hello = new JSONObject()
                     .put("role", "peer")
+                    .put("bluetooth", bluetoothCapabilities.toJson())
                     .put("maxPeers", MAX_CLASSIC_PEERS)
                     .put("device", safeName(device));
 

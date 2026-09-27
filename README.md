@@ -25,6 +25,10 @@ Phone A can act as a controller while Phone B exposes a set of explicitly author
 
 ## Architecture
 
+- **Bluetooth-first adaptive transport** - runtime capability negotiation across legacy BR/EDR and BLE generations. The app uses the strongest common Bluetooth plane actually exposed by both Android devices instead of guessing a Bluetooth version.
+- **LE performance path** - LE L2CAP CoC is preferred for bulk when both peers expose it; newer PHY/advertising capabilities are recorded for adaptive behavior and are never assumed.
+- **Optional Wi-Fi** - Wi-Fi Direct/Aware and local TCP remain available as optional higher-throughput paths. They are not required for the Bluetooth control architecture.
+
 - **Controller** - discovers Phone B, negotiates capabilities, sends commands, receives events and synchronized state.
 - **Transport** - starts with Bluetooth and is abstracted so higher-bandwidth local transports can be added later.
 - **Protocol** - versioned, authenticated, bidirectional messages with capability negotiation.
@@ -33,7 +37,7 @@ Phone A can act as a controller while Phone B exposes a set of explicitly author
 
 ## Design principle
 
-Bluetooth is the **communication pipe**, not the control authority. Phone B remains the authority over what the controller is allowed to do.
+Bluetooth is the **primary communication pipe**, not the control authority. Wi-Fi remains an optional secondary path. Phone B remains the authority over what the controller is allowed to do.
 
 The application must never assume unrestricted Android control. Each capability must use an Android-supported mechanism and explicit user authorization where required.
 
