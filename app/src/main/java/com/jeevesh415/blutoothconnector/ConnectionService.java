@@ -739,6 +739,7 @@ public final class ConnectionService extends Service {
             if (authorized) {
                 capabilities.put("app.control");
                 capabilities.put("device.policy");
+                capabilities.put("sensor.control");
             }
 
             if (authorized
