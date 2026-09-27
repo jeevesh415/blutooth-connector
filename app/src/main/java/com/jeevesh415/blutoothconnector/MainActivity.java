@@ -498,25 +498,64 @@ public final class MainActivity extends Activity {
                 return;
             }
             try {
-                JSONObject result = frame.payload
-                        .optJSONObject("result");
+                JSONObject result = frame.payload.optJSONObject("result");
                 if (result == null) result = frame.payload;
                 JSONArray sensors = result.optJSONArray("sensors");
                 if (sensors == null) throw new IllegalStateException("No sensor inventory");
 
-                LinearLayout panel = new LinearLayout(this);
-                panel.setOrientation(LinearLayout.VERTICAL);
-                panel.setPadding(24, 8, 24, 8);
+                LinearLayout content = new LinearLayout(this);
+                content.setOrientation(LinearLayout.VERTICAL);
+                content.setPadding(22, 10, 22, 8);
 
                 TextView summary = new TextView(this);
-                summary.setText("Remote sensors: " + sensors.length()
-                        + "\\nAcquisition control uses Android's physical sensor limits.");
+                summary.setText(
+                        sensors.length() + " sensors  •  "
+                                + result.optInt("activeCount", 0) + " active\n"
+                                + "Remote acquisition runs at the fastest rate the sensor + Android stack accepts.");
                 summary.setTextSize(14);
-                panel.addView(summary);
+                summary.setTextColor(android.graphics.Color.parseColor("#23324A"));
+                summary.setPadding(2, 2, 2, 12);
+                content.addView(summary);
 
-                Button snapshot = compactButton("Read latest sensor state");
-                snapshot.setOnClickListener(v -> requestSensorSnapshot(session, active));
-                panel.addView(snapshot);
+                LinearLayout primary = new LinearLayout(this);
+                primary.setOrientation(LinearLayout.HORIZONTAL);
+
+                Button optimize = compactButton("AUTO\nMAX");
+                optimize.setTextSize(12);
+                optimize.setOnClickListener(v ->
+                        configureAllSensorsForPerformance(session, active));
+                primary.addView(optimize, new LinearLayout.LayoutParams(0, 62, 1f));
+
+                Button live = compactButton("LIVE\nSTATE");
+                live.setTextSize(12);
+                live.setOnClickListener(v ->
+                        requestSensorSnapshot(session, active));
+                LinearLayout.LayoutParams liveLp = new LinearLayout.LayoutParams(0, 62, 1f);
+                liveLp.leftMargin = 8;
+                primary.addView(live, liveLp);
+
+                Button fusion = compactButton("IMU\nFUSION");
+                fusion.setTextSize(12);
+                fusion.setOnClickListener(v ->
+                        requestSensorFusion(session, active));
+                LinearLayout.LayoutParams fusionLp = new LinearLayout.LayoutParams(0, 62, 1f);
+                fusionLp.leftMargin = 8;
+                primary.addView(fusion, fusionLp);
+
+                content.addView(primary);
+
+                Button stop = compactButton("STOP ALL SENSOR STREAMS");
+                stop.setOnClickListener(v ->
+                        stopAllRemoteSensors(session, active));
+                content.addView(stop);
+
+                TextView matrixLabel = new TextView(this);
+                matrixLabel.setText("SENSOR MATRIX");
+                matrixLabel.setTextSize(11);
+                matrixLabel.setTypeface(null, android.graphics.Typeface.BOLD);
+                matrixLabel.setTextColor(android.graphics.Color.parseColor("#237D9F"));
+                matrixLabel.setPadding(2, 14, 2, 6);
+                content.addView(matrixLabel);
 
                 android.widget.ScrollView listScroll =
                         new android.widget.ScrollView(this);
@@ -527,39 +566,73 @@ public final class MainActivity extends Activity {
                     JSONObject sensor = sensors.getJSONObject(i);
                     int handle = sensor.getInt("handle");
                     String name = sensor.optString("name", "Sensor");
+                    int type = sensor.optInt("type", -1);
                     int minDelay = sensor.optInt("minDelayUs", 0);
+                    double maxHz = minDelay > 0 ? 1_000_000.0 / minDelay : 0.0;
+                    boolean streamable = sensor.optBoolean("streamable", false);
 
                     LinearLayout row = new LinearLayout(this);
                     row.setOrientation(LinearLayout.HORIZONTAL);
                     row.setGravity(Gravity.CENTER_VERTICAL);
-                    row.setPadding(0, 10, 0, 10);
+                    row.setPadding(4, 9, 4, 9);
 
                     TextView label = new TextView(this);
-                    label.setText(name + "\\nmin " + minDelay + " µs");
-                    label.setTextSize(13);
-                    label.setLayoutParams(new LinearLayout.LayoutParams(
-                            0, -2, 1f));
+                    String detail = "type " + type
+                            + "  •  " + (minDelay > 0
+                            ? String.format(java.util.Locale.US, "%.0f Hz max-request", maxHz)
+                            : "event driven")
+                            + "  •  " + (streamable ? "streamable" : "trigger/event");
+                    label.setText(name + "\n" + detail);
+                    label.setTextSize(12.5f);
+                    label.setTextColor(android.graphics.Color.parseColor("#23324A"));
+                    label.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
 
-                    Button configure = compactButton("Tune");
-                    configure.setOnClickListener(v ->
+                    Button tune = compactButton("TUNE");
+                    tune.setTextSize(11);
+                    tune.setOnClickListener(v ->
                             configureRemoteSensor(session, active, handle, name, minDelay));
 
                     row.addView(label);
-                    row.addView(configure);
+                    row.addView(tune);
                     list.addView(row);
                 }
 
                 listScroll.addView(list);
-                panel.addView(listScroll, new LinearLayout.LayoutParams(-1, 420));
+                content.addView(listScroll, new LinearLayout.LayoutParams(-1, 430));
 
                 new android.app.AlertDialog.Builder(this)
-                        .setTitle("SENSOR CONTROL  •  " + safeName(session.device))
-                        .setView(panel)
+                        .setTitle("Hardware & Sensor Control")
+                        .setView(content)
                         .setNegativeButton("Close", null)
                         .show();
+
+                updateStatus("Sensor control ready for " + sensors.length()
+                        + " sensors on " + safeName(session.device) + ".");
             } catch (Exception parseError) {
                 updateStatus("Sensor panel error: " + safeError(parseError));
             }
+        }));
+    }
+
+    private void configureAllSensorsForPerformance(
+            DeviceSession session,
+            ReliableCommandClient client) {
+        client.execute(
+                session.nextSequence(),
+                "sensor.control",
+                "optimize",
+                null
+        ).whenComplete((frame, error) -> runOnUiThread(() -> {
+            if (error != null) {
+                updateStatus("Sensor optimization failed: " + safeError(error));
+                return;
+            }
+            JSONObject result = frame.payload.optJSONObject("result");
+            if (result == null) result = frame.payload;
+            updateStatus(
+                    "MAX PERFORMANCE requested • "
+                            + result.optInt("requested", 0) + " streams started • "
+                            + result.optInt("skipped", 0) + " trigger-only/unavailable");
         }));
     }
 
@@ -569,37 +642,87 @@ public final class MainActivity extends Activity {
             int handle,
             String name,
             int minDelayUs) {
-        final android.widget.EditText input = new android.widget.EditText(this);
-        input.setInputType(android.text.InputType.TYPE_CLASS_NUMBER
-                | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
-        input.setHint("Sampling rate in Hz");
+        final android.widget.LinearLayout editor =
+                new android.widget.LinearLayout(this);
+        editor.setOrientation(LinearLayout.VERTICAL);
+        editor.setPadding(8, 4, 8, 0);
+
+        final android.widget.EditText rateInput = new android.widget.EditText(this);
+        rateInput.setInputType(
+                android.text.InputType.TYPE_CLASS_NUMBER
+                        | android.text.InputType.TYPE_NUMBER_FLAG_DECIMAL);
+        rateInput.setHint("Sampling rate in Hz");
+        if (minDelayUs > 0) {
+            rateInput.setText(String.format(
+                    java.util.Locale.US,
+                    "%.0f",
+                    1_000_000.0 / minDelayUs));
+            rateInput.setSelection(rateInput.length());
+        }
+        editor.addView(rateInput);
+
+        final android.widget.EditText latencyInput =
+                new android.widget.EditText(this);
+        latencyInput.setInputType(android.text.InputType.TYPE_CLASS_NUMBER);
+        latencyInput.setHint("Batching latency (ms), 0 = immediate");
+        latencyInput.setText("0");
+        editor.addView(latencyInput);
 
         new android.app.AlertDialog.Builder(this)
-                .setTitle("Tune " + name)
-                .setMessage("Effective rate is bounded by the physical sensor and Android.")
-                .setView(input)
+                .setTitle("Tune • " + name)
+                .setMessage(
+                        "The request is clamped to the sensor's Android/HAL limits. "
+                                + "Use 0 ms latency for lowest acquisition delay.")
+                .setView(editor)
                 .setNegativeButton("Cancel", null)
                 .setPositiveButton("Apply", (dialog, which) -> {
                     try {
-                        double hz = Double.parseDouble(input.getText().toString());
-                        if (!(hz > 0) || hz > 10000) throw new IllegalArgumentException("Rate must be 0 < Hz ≤ 10000");
+                        double hz = Double.parseDouble(
+                                rateInput.getText().toString().trim());
+                        long latencyMs = Long.parseLong(
+                                latencyInput.getText().toString().trim());
+                        if (!(hz > 0) || hz > 10000) {
+                            throw new IllegalArgumentException(
+                                    "Rate must be 0 < Hz <= 10000");
+                        }
+                        if (latencyMs < 0 || latencyMs > 60000) {
+                            throw new IllegalArgumentException(
+                                    "Latency must be 0..60000 ms");
+                        }
+
                         int requestedPeriodUs = (int) Math.max(
-                                1, Math.round(1_000_000.0 / hz));
+                                1L,
+                                Math.round(1_000_000.0 / hz));
+                        int maxLatencyUs = (int) Math.min(
+                                Integer.MAX_VALUE,
+                                latencyMs * 1000L);
+
                         JSONObject payload = new JSONObject()
                                 .put("handle", handle)
                                 .put("periodUs", requestedPeriodUs)
-                                .put("maxReportLatencyUs", 0);
+                                .put("maxReportLatencyUs", maxLatencyUs);
+
                         client.execute(
                                 session.nextSequence(),
                                 "sensor.control",
                                 "configure",
                                 payload
-                        ).whenComplete((frame, error) -> runOnUiThread(() ->
-                                updateStatus(error == null
-                                        ? "Sensor configured: " + name + " → " + hz + " Hz"
-                                        : "Sensor tuning failed: " + safeError(error))));
+                        ).whenComplete((frame, error) -> runOnUiThread(() -> {
+                            if (error != null) {
+                                updateStatus(
+                                        "Sensor tuning failed: " + safeError(error));
+                                return;
+                            }
+                            JSONObject result = frame.payload.optJSONObject("result");
+                            if (result == null) result = frame.payload;
+                            updateStatus(
+                                    "Configured " + name + " • requested "
+                                            + hz + " Hz • effective "
+                                            + result.optDouble("effectiveRateHz", hz)
+                                            + " Hz");
+                        }));
                     } catch (Exception error) {
-                        updateStatus("Invalid sensor rate: " + safeError(error));
+                        updateStatus("Invalid sensor settings: " + safeError(error));
                     }
                 })
                 .show();
@@ -616,12 +739,59 @@ public final class MainActivity extends Activity {
         ).whenComplete((frame, error) -> runOnUiThread(() -> {
             if (error != null) {
                 updateStatus("Sensor snapshot failed: " + safeError(error));
-            } else {
-                updateStatus("Sensor snapshot from "
-                        + safeName(session.device) + ": "
-                        + frame.payload.toString());
+                return;
             }
+            JSONObject result = frame.payload.optJSONObject("result");
+            if (result == null) result = frame.payload;
+            updateStatus(
+                    "LIVE STATE • " + result.optInt("count", 0)
+                            + " samples • "
+                            + result.optInt("activeCount", 0) + " active");
         }));
+    }
+
+    private void requestSensorFusion(
+            DeviceSession session,
+            ReliableCommandClient client) {
+        client.execute(
+                session.nextSequence(),
+                "sensor.control",
+                "fusion",
+                null
+        ).whenComplete((frame, error) -> runOnUiThread(() -> {
+            if (error != null) {
+                updateStatus("IMU fusion unavailable: " + safeError(error));
+                return;
+            }
+            JSONObject result = frame.payload.optJSONObject("result");
+            if (result == null) result = frame.payload;
+            if (!result.optBoolean("available", false)) {
+                updateStatus("IMU fusion waiting for accelerometer/gyro samples.");
+                return;
+            }
+
+            double roll = result.optDouble("rollDeg", 0.0);
+            double pitch = result.optDouble("pitchDeg", 0.0);
+            double yaw = result.optDouble("yawDeg", 0.0);
+            updateStatus(String.format(
+                    java.util.Locale.US,
+                    "IMU FUSION • roll %.1f° • pitch %.1f° • yaw %.1f°",
+                    roll, pitch, yaw));
+        }));
+    }
+
+    private void stopAllRemoteSensors(
+            DeviceSession session,
+            ReliableCommandClient client) {
+        client.execute(
+                session.nextSequence(),
+                "sensor.control",
+                "stop",
+                null
+        ).whenComplete((frame, error) -> runOnUiThread(() ->
+                updateStatus(error == null
+                        ? "All remote sensor streams stopped."
+                        : "Could not stop sensor streams: " + safeError(error))));
     }
 
     private void inspectBluetooth() {
