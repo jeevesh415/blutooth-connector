@@ -5,7 +5,6 @@ import android.hardware.Sensor;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
-import static org.junit.Assert.assertTrue;
 
 public final class SensorFusionEngineTest {
     private static final double G = 9.80665;
@@ -13,7 +12,9 @@ public final class SensorFusionEngineTest {
     @Test public void initialStateIsUnavailable() throws Exception {
         SensorFusionEngine engine = new SensorFusionEngine();
 
-        assertTrue(!engine.quaternionCopy().equals(null));
+        double[] q = engine.quaternionCopy();
+        assertEquals(4, q.length);
+        assertEquals(1.0, q[0], 1.0e-12);
     }
 
     @Test public void gravityAndMagnetometerGiveStableReference() throws Exception {
