@@ -495,7 +495,7 @@ structure AllocationContract where
   conservation :
     shares.foldl (fun acc s => acc + s.numerator) 0 = denominator
   bounded :
-    ∀ s, s.numerator ≤ denominator
+    ∀ s : Share, s.numerator ≤ denominator
 
 theorem allocation_share_is_bounded
     (c : AllocationContract) (s : Share) (hs : s ∈ c.shares) :
