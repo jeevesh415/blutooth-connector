@@ -110,7 +110,9 @@ theorem accepted_replay_strictly_advances
     (highest incoming : Nat)
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
-  simp [nextHighest, AcceptsReplay, h]
+  change highest <
+    (if 0 < incoming ∧ highest < incoming then incoming else highest)
+  rw [if_pos h]
   exact h.2
 
 theorem zero_sequence_is_rejected
@@ -127,11 +129,13 @@ theorem stale_sequence_is_rejected
 theorem replay_state_never_moves_backward
     (highest incoming : Nat) :
     highest ≤ nextHighest highest incoming := by
-  unfold nextHighest
+  change highest ≤
+    (if 0 < incoming ∧ highest < incoming then incoming else highest)
   by_cases h : 0 < incoming ∧ highest < incoming
-  · simp [h]
-    exact h.2.le
-  · simp [h]
+  · rw [if_pos h]
+    exact Nat.le_of_lt h.2
+  · rw [if_neg h]
+
 
 /-! --------------------------------------------------------------------------
   4. Command deduplication capacity
@@ -264,15 +268,15 @@ def ValidChunk (c : Chunk) : Prop :=
 
 theorem valid_chunk_cannot_overrun_file
     (c : Chunk) (h : ValidChunk c) :
-    c.offset + c.length ≤ c.fileSize := h.2.2.2.2.2
+    c.offset + c.length ≤ c.fileSize := h.2.2.2.2.1
 
 theorem valid_chunk_payload_is_bounded
     (c : Chunk) (h : ValidChunk c) :
-    c.length ≤ maxChunkBytes := h.2.2.1
+    c.length ≤ maxChunkBytes := h.2.1
 
 theorem valid_chunk_index_is_admissible
     (c : Chunk) (h : ValidChunk c) :
-    c.index < c.count := h.2.2.2.1
+    c.index < c.count := h.2.2.1
 
 /-! --------------------------------------------------------------------------
   9. Exactly-once chunk bookkeeping
@@ -317,26 +321,43 @@ def hostBufferTarget (packet bdp : Nat) : Nat :=
   clampNat minBufferBytes maxBufferBytes
     (max (4 * packet) (4 * bdp))
 
+theorem clamp_lower_bound
+    (lo hi x : Nat) (hlo : lo ≤ hi) :
+    lo ≤ clampNat lo hi x := by
+  unfold clampNat
+  by_cases h₁ : hi < x
+  · rw [if_pos h₁]
+    exact hlo
+  · rw [if_neg h₁]
+    by_cases h₂ : x < lo
+    · rw [if_pos h₂]
+    · rw [if_neg h₂]
+      exact Nat.le_of_not_gt h₂
+
+theorem clamp_upper_bound
+    (lo hi x : Nat) (hlo : lo ≤ hi) :
+    clampNat lo hi x ≤ hi := by
+  unfold clampNat
+  by_cases h₁ : hi < x
+  · rw [if_pos h₁]
+  · rw [if_neg h₁]
+    by_cases h₂ : x < lo
+    · rw [if_pos h₂]
+      exact hlo
+    · rw [if_neg h₂]
+      exact Nat.le_of_not_gt h₁
+
 theorem host_buffer_has_lower_bound
     (packet bdp : Nat) :
     minBufferBytes ≤ hostBufferTarget packet bdp := by
-  have hbounds : minBufferBytes ≤ maxBufferBytes := by decide
-  unfold hostBufferTarget clampNat
-  by_cases h₁ : maxBufferBytes <
-      max (4 * packet) (4 * bdp)
-  · simp [h₁]
-    exact hbounds
-  · by_cases h₂ :
-        max (4 * packet) (4 * bdp) < minBufferBytes
-    · simp [h₁, h₂]
-    · simp [h₁, h₂]
-      omega
+  apply clamp_lower_bound
+  decide
 
 theorem host_buffer_has_upper_bound
     (packet bdp : Nat) :
     hostBufferTarget packet bdp ≤ maxBufferBytes := by
-  unfold hostBufferTarget clampNat
-  exact Nat.min_le_left _ _
+  apply clamp_upper_bound
+  decide
 
 /-! --------------------------------------------------------------------------
   12. Sensor handle safety
@@ -352,7 +373,6 @@ theorem sensor_handle_is_positive
     0 < sensorHandle androidId fallback := by
   by_cases h : androidId > 0
   · simp [sensorHandle, h]
-    exact h
   · simp [sensorHandle, h]
     omega
 
@@ -479,14 +499,14 @@ structure AllocationContract where
 
 theorem allocation_share_is_bounded
     (c : AllocationContract) (s : Share) (hs : s ∈ c.shares) :
-    s.numerator ≤ c.denominator :=
-  c.bounded s
+    Share.numerator s ≤ c.denominator :=
+  AllocationContract.bounded c s
 
 theorem allocation_conserves_work
     (c : AllocationContract) :
-    c.shares.foldl (fun acc s => acc + s.numerator) 0 =
+    List.foldl (fun acc s => acc + Share.numerator s) 0 c.shares =
       c.denominator :=
-  c.conservation
+  AllocationContract.conservation c
 
 /-! --------------------------------------------------------------------------
   19. Network path selection
