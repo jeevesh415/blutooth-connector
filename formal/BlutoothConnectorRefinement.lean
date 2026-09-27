@@ -23,7 +23,7 @@ def javaAccept (highest incoming : Nat) : Bool :=
   else true
 
 def javaHighest (highest incoming : Nat) : Nat :=
-  if javaAccept highest incoming then incoming else highest
+  if javaAccept highest incoming = true then incoming else highest
 
 theorem java_accept_iff
     (highest incoming : Nat) :
