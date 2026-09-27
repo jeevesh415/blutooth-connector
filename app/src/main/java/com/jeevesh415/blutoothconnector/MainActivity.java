@@ -587,10 +587,15 @@ public final class MainActivity extends Activity {
                     label.setTextColor(android.graphics.Color.parseColor("#23324A"));
                     label.setLayoutParams(new LinearLayout.LayoutParams(0, -2, 1f));
 
-                    Button tune = compactButton("TUNE");
+                    Button tune = compactButton(streamable ? "TUNE" : "TRIGGER");
                     tune.setTextSize(11);
-                    tune.setOnClickListener(v ->
-                            configureRemoteSensor(session, active, handle, name, minDelay));
+                    if (streamable) {
+                        tune.setOnClickListener(v ->
+                                configureRemoteSensor(session, active, handle, name, minDelay));
+                    } else {
+                        tune.setOnClickListener(v ->
+                                triggerRemoteSensor(session, active, handle, name));
+                    }
 
                     row.addView(label);
                     row.addView(tune);
@@ -634,6 +639,22 @@ public final class MainActivity extends Activity {
                             + result.optInt("requested", 0) + " streams started • "
                             + result.optInt("skipped", 0) + " trigger-only/unavailable");
         }));
+    }
+
+    private void triggerRemoteSensor(
+            DeviceSession session,
+            ReliableCommandClient client,
+            int handle,
+            String name) {
+        client.execute(
+                session.nextSequence(),
+                "sensor.control",
+                "trigger",
+                new JSONObject().put("handle", handle)
+        ).whenComplete((frame, error) -> runOnUiThread(() ->
+                updateStatus(error == null
+                        ? "Trigger armed for " + name + "."
+                        : "Trigger failed: " + safeError(error))));
     }
 
     private void configureRemoteSensor(
