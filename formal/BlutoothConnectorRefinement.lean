@@ -43,7 +43,9 @@ theorem java_highest_refines
     javaHighest highest incoming = nextHighest highest incoming := by
   have hr : AcceptsReplay highest incoming :=
     (java_accept_iff highest incoming).mp h
-  simp [javaHighest, nextHighest, javaAccept, h, hr]
+  unfold javaHighest nextHighest
+  rw [if_pos h]
+  rw [if_pos hr]
 
 /-! Frame.java -/
 
@@ -178,6 +180,7 @@ def javaChunkValid
   count = javaChunkExpectedCount fileSize ∧
   index < count ∧
   offset = javaChunkOffset index ∧
+  offset < fileSize ∧
   length > 0 ∧
   length ≤ maxChunkBytes ∧
   offset + length ≤ fileSize ∧
@@ -192,14 +195,15 @@ theorem java_chunk_valid_implies_abstract_safe
         length := length
         index := index
         count := count } := by
-  rcases h with ⟨hf, hc, hi, ho, hl, hb, hr, hcount⟩
-  exact ⟨hf, hl, hb, hi, by omega, hr, hcount⟩
+  rcases h with ⟨hf, hc, hi, ho, hoff, hl, hb, hr, hcount⟩
+  exact ⟨hf, hl, hb, hi, hoff, hr, hcount⟩
 
 theorem java_chunk_never_overruns
     (fileSize offset length index count : Nat)
     (h : javaChunkValid fileSize offset length index count) :
     offset + length ≤ fileSize := by
-  exact h.2.2.2.2.2.2
+  rcases h with ⟨_, _, _, _, _, _, _, hr, _⟩
+  exact hr
 
 /-! Sensor logical-handle construction -/
 
