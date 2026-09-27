@@ -41,14 +41,12 @@ theorem java_highest_refines
     (highest incoming : Nat)
     (h : javaAccept highest incoming = true) :
     javaHighest highest incoming = nextHighest highest incoming := by
-  have hr : AcceptsReplay highest incoming :=
-    (java_accept_iff highest incoming).mp h
-  letI : Decidable (AcceptsReplay highest incoming) :=
-    Classical.propDecidable _
-  change
-    (if javaAccept highest incoming then incoming else highest) =
-      (if AcceptsReplay highest incoming then incoming else highest)
-  simp [h, hr]
+  classical
+  by_cases hr : AcceptsReplay highest incoming
+  · have hj : javaAccept highest incoming = true :=
+      (java_accept_iff highest incoming).mpr hr
+    simp [javaHighest, nextHighest, hr, hj]
+  · exact False.elim (hr ((java_accept_iff highest incoming).mp h))
 
 /-! Frame.java -/
 
