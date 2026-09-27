@@ -18,16 +18,18 @@ import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
 
 /**
- * Remote sensor inspection/control plane.
+ * Remote sensor control plane.
  *
- * "Control" here means sensor acquisition policy: registration period and
- * max report latency. The app cannot rewrite a physical sensor's hardware
- * sampling limit or turn arbitrary sensors into actuators.
+ * The remote peer can inspect every SensorManager sensor and control the
+ * acquisition policy exposed by Android: sampling period and batching latency.
+ * A max-performance command requests each stream at its fastest hardware-
+ * reported period; Android and the sensor HAL remain authoritative.
  */
 public final class SensorControlCapability implements Capability {
     private final SensorManager manager;
-    private final Map<Integer, SensorEvent> latest = new ConcurrentHashMap<>();
+    private final Map<Integer, SensorSample> latest = new ConcurrentHashMap<>();
     private final Map<Integer, SensorEventListener> listeners = new ConcurrentHashMap<>();
+    private final SensorFusionEngine fusion = new SensorFusionEngine();
 
     public SensorControlCapability(Context context) {
         manager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
@@ -35,7 +37,7 @@ public final class SensorControlCapability implements Capability {
     }
 
     @Override public String id() { return "sensor.control"; }
-    @Override public String version() { return "1.0"; }
+    @Override public String version() { return "2.0"; }
     @Override public boolean requiresExplicitAuthorization() { return true; }
 
     @Override public boolean canHandle(Frame command) {
@@ -47,6 +49,8 @@ public final class SensorControlCapability implements Capability {
         return "list".equals(op)
                 || "snapshot".equals(op)
                 || "configure".equals(op)
+                || "optimize".equals(op)
+                || "fusion".equals(op)
                 || "stop".equals(op);
     }
 
@@ -59,9 +63,14 @@ public final class SensorControlCapability implements Capability {
             result = snapshot();
         } else if ("configure".equals(operation)) {
             result = configure(command.payload);
+        } else if ("optimize".equals(operation)) {
+            result = optimize();
+        } else if ("fusion".equals(operation)) {
+            result = fusion.snapshot();
         } else {
             result = stop(command.payload);
         }
+
         return new Frame(
                 Protocol.VERSION,
                 Protocol.RESULT,
@@ -85,27 +94,108 @@ public final class SensorControlCapability implements Capability {
                     .put("minDelayUs", Math.max(0, s.getMinDelay()))
                     .put("powerMa", s.getPower())
                     .put("wakeUp", s.isWakeUpSensor())
-                    .put("reportingMode", s.getReportingMode()));
+                    .put("reportingMode", s.getReportingMode())
+                    .put("dynamic", s.isDynamicSensor())
+                    .put("directChannelTypes", directChannelTypes(s))
+                    .put("streamable",
+                            s.getReportingMode() == Sensor.REPORTING_MODE_CONTINUOUS
+                                    || s.getReportingMode() == Sensor.REPORTING_MODE_ON_CHANGE));
         }
         return new JSONObject()
                 .put("count", sensors.length())
+                .put("activeCount", listeners.size())
                 .put("sensors", sensors);
+    }
+
+    private JSONArray directChannelTypes(Sensor sensor) {
+        JSONArray out = new JSONArray();
+        int mask = sensor.getHighestDirectReportRateLevel();
+        if (mask != SensorDirectRate.UNKNOWN) {
+            if ((mask & SensorDirectRate.NORMAL) != 0) out.put("normal");
+            if ((mask & SensorDirectRate.FAST) != 0) out.put("fast");
+            if ((mask & SensorDirectRate.VERY_FAST) != 0) out.put("very_fast");
+        }
+        return out;
     }
 
     private JSONObject configure(JSONObject p) throws Exception {
         Sensor sensor = find(p.optInt("handle", -1));
         if (sensor == null) throw new IllegalArgumentException("Unknown sensor handle");
 
-        int requestedUs = p.optInt("periodUs", sensor.getMinDelay());
         int minUs = Math.max(1, sensor.getMinDelay());
+        int requestedUs = p.optInt("periodUs", minUs);
         int periodUs = Math.max(minUs, requestedUs);
-
         int maxLatencyUs = Math.max(0, p.optInt("maxReportLatencyUs", 0));
+
+        if (sensor.getReportingMode() != Sensor.REPORTING_MODE_CONTINUOUS
+                && sensor.getReportingMode() != Sensor.REPORTING_MODE_ON_CHANGE) {
+            throw new IllegalArgumentException(
+                    "This sensor is trigger-only; use its Android-supported trigger API");
+        }
+
+        register(sensor, periodUs, maxLatencyUs);
+
+        return new JSONObject()
+                .put("handle", sensor.getId())
+                .put("name", sensor.getName())
+                .put("requestedPeriodUs", requestedUs)
+                .put("effectivePeriodUs", periodUs)
+                .put("effectiveRateHz", 1_000_000.0 / periodUs)
+                .put("maxReportLatencyUs", maxLatencyUs)
+                .put("reportingMode", sensor.getReportingMode())
+                .put("registered", true);
+    }
+
+    /**
+     * Request the lowest Android-reported period for every streamable sensor.
+     * The sensor HAL is still free to clamp/coalesce deliveries.
+     */
+    private JSONObject optimize() {
+        int started = 0;
+        int skipped = 0;
+        for (Sensor sensor : manager.getSensorList(Sensor.TYPE_ALL)) {
+            int mode = sensor.getReportingMode();
+            if (mode != Sensor.REPORTING_MODE_CONTINUOUS
+                    && mode != Sensor.REPORTING_MODE_ON_CHANGE) {
+                skipped++;
+                continue;
+            }
+
+            int periodUs = Math.max(1, sensor.getMinDelay());
+            try {
+                register(sensor, periodUs, 0);
+                started++;
+            } catch (Exception ignored) {
+                skipped++;
+            }
+        }
+        return new JSONObject()
+                .put("mode", "max-performance")
+                .put("requested", started)
+                .put("skipped", skipped)
+                .put("activeCount", listeners.size());
+    }
+
+    private void register(Sensor sensor, int periodUs, int maxLatencyUs) {
         stopSensor(sensor.getId());
 
         SensorEventListener listener = new SensorEventListener() {
             @Override public void onSensorChanged(SensorEvent event) {
-                latest.put(event.sensor.getId(), copy(event));
+                float[] values = new float[event.values.length];
+                System.arraycopy(event.values, 0, values, 0, event.values.length);
+                SensorSample sample = new SensorSample(
+                        event.sensor.getId(),
+                        event.sensor.getType(),
+                        event.timestamp,
+                        event.accuracy,
+                        values);
+                latest.put(event.sensor.getId(), sample);
+                if (event.values.length >= 3) {
+                    fusion.onSample(
+                            event.sensor.getType(),
+                            event.timestamp,
+                            values);
+                }
             }
 
             @Override public void onAccuracyChanged(Sensor sensor, int accuracy) {}
@@ -114,44 +204,45 @@ public final class SensorControlCapability implements Capability {
         boolean registered = manager.registerListener(
                 listener, sensor, periodUs, maxLatencyUs);
         if (!registered) throw new IllegalStateException("Sensor registration rejected");
-
         listeners.put(sensor.getId(), listener);
-
-        return new JSONObject()
-                .put("handle", sensor.getId())
-                .put("name", sensor.getName())
-                .put("requestedPeriodUs", requestedUs)
-                .put("effectivePeriodUs", periodUs)
-                .put("maxReportLatencyUs", maxLatencyUs)
-                .put("registered", true);
     }
 
-    private JSONObject snapshot() throws Exception {
+    private JSONObject snapshot() {
         JSONArray values = new JSONArray();
-        for (SensorEvent event : latest.values()) {
-            JSONObject sample = new JSONObject()
-                    .put("handle", event.sensor.getId())
-                    .put("type", event.sensor.getType())
-                    .put("name", event.sensor.getName())
-                    .put("timestampNs", event.timestamp)
+        long nowNs = SystemClock.elapsedRealtimeNanos();
+        for (SensorSample sample : latest.values()) {
+            JSONObject item = new JSONObject()
+                    .put("handle", sample.id)
+                    .put("type", sample.type)
+                    .put("timestampNs", sample.timestampNs)
+                    .put("accuracy", sample.accuracy)
                     .put("ageMs", Math.max(0,
-                            (SystemClock.elapsedRealtimeNanos() - event.timestamp) / 1_000_000L));
+                            (nowNs - sample.timestampNs) / 1_000_000L));
             JSONArray v = new JSONArray();
-            for (float x : event.values) v.put(x);
-            sample.put("values", v);
-            values.put(sample);
+            for (float x : sample.values) v.put(x);
+            item.put("values", v);
+            values.put(item);
         }
-        return new JSONObject().put("count", values.length()).put("samples", values);
+        return new JSONObject()
+                .put("count", values.length())
+                .put("activeCount", listeners.size())
+                .put("samples", values);
     }
 
     private JSONObject stop(JSONObject p) {
         int handle = p.optInt("handle", -1);
         if (handle < 0) {
             for (Integer id : listeners.keySet()) stopSensor(id);
-            return new JSONObject().put("stopped", "all");
+            fusion.reset();
+            return new JSONObject()
+                    .put("stopped", "all")
+                    .put("activeCount", 0);
         }
+
         stopSensor(handle);
-        return new JSONObject().put("stopped", handle);
+        return new JSONObject()
+                .put("stopped", handle)
+                .put("activeCount", listeners.size());
     }
 
     private void stopSensor(int id) {
@@ -167,12 +258,33 @@ public final class SensorControlCapability implements Capability {
         return null;
     }
 
-    private static SensorEvent copy(SensorEvent source) {
-        SensorEvent copy = new SensorEvent(source.values.length);
-        copy.sensor = source.sensor;
-        copy.timestamp = source.timestamp;
-        copy.accuracy = source.accuracy;
-        System.arraycopy(source.values, 0, copy.values, 0, source.values.length);
-        return copy;
+    private static final class SensorSample {
+        final int id;
+        final int type;
+        final long timestampNs;
+        final int accuracy;
+        final float[] values;
+
+        SensorSample(int id, int type, long timestampNs, int accuracy, float[] values) {
+            this.id = id;
+            this.type = type;
+            this.timestampNs = timestampNs;
+            this.accuracy = accuracy;
+            this.values = values;
+        }
+    }
+
+    /**
+     * Sensor#getHighestDirectReportRateLevel() returns a rate-level enum,
+     * while the direct-channel type mask is exposed through the sensor API.
+     * We keep the UI field conservative and only expose known rate levels.
+     */
+    private static final class SensorDirectRate {
+        static final int UNKNOWN = 0;
+        static final int NORMAL = Sensor.DIRECT_RATE_NORMAL;
+        static final int FAST = Sensor.DIRECT_RATE_FAST;
+        static final int VERY_FAST = Sensor.DIRECT_RATE_VERY_FAST;
+
+        private SensorDirectRate() {}
     }
 }
