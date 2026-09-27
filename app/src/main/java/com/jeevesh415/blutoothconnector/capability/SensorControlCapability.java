@@ -212,7 +212,7 @@ public final class SensorControlCapability implements Capability {
                 .put("armed", true);
     }
 
-    private JSONObject optimize() {
+    private JSONObject optimize() throws Exception {
         int started = 0;
         int skipped = 0;
         for (Sensor sensor : manager.getSensorList(Sensor.TYPE_ALL)) {
@@ -270,7 +270,7 @@ public final class SensorControlCapability implements Capability {
         listeners.put(handle, listener);
     }
 
-    private JSONObject snapshot() {
+    private JSONObject snapshot() throws Exception {
         JSONArray values = new JSONArray();
         long nowNs = SystemClock.elapsedRealtimeNanos();
         for (SensorSample sample : latest.values()) {
@@ -292,7 +292,7 @@ public final class SensorControlCapability implements Capability {
                 .put("samples", values);
     }
 
-    private JSONObject stop(JSONObject p) {
+    private JSONObject stop(JSONObject p) throws Exception {
         int handle = p.optInt("handle", -1);
         if (handle < 0) {
             java.util.HashSet<Integer> ids = new java.util.HashSet<>(listeners.keySet());
