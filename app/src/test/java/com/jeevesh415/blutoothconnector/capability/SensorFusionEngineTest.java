@@ -2,6 +2,8 @@ package com.jeevesh415.blutoothconnector.capability;
 
 import android.hardware.Sensor;
 
+import org.json.JSONObject;
+
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -15,6 +17,15 @@ public final class SensorFusionEngineTest {
         double[] q = engine.quaternionCopy();
         assertEquals(4, q.length);
         assertEquals(1.0, q[0], 1.0e-12);
+    }
+
+    @Test public void snapshotSerializationContainsFusionState() throws Exception {
+        SensorFusionEngine engine = new SensorFusionEngine();
+        JSONObject snapshot = engine.snapshot();
+
+        assertEquals(4, snapshot.getJSONArray("quaternion").length());
+        assertEquals(3, snapshot.getJSONArray("eulerDeg").length());
+        assertEquals(false, snapshot.getBoolean("available"));
     }
 
     @Test public void gravityAndMagnetometerGiveStableReference() throws Exception {
