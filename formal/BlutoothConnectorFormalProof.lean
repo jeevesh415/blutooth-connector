@@ -110,9 +110,7 @@ theorem accepted_replay_strictly_advances
     (highest incoming : Nat)
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
-  change highest <
-    (if 0 < incoming ∧ highest < incoming then incoming else highest)
-  rw [if_pos h]
+  simp [AcceptsReplay, nextHighest] at h ⊢
   exact h.2
 
 theorem zero_sequence_is_rejected
@@ -129,12 +127,12 @@ theorem stale_sequence_is_rejected
 theorem replay_state_never_moves_backward
     (highest incoming : Nat) :
     highest ≤ nextHighest highest incoming := by
-  change highest ≤
-    (if 0 < incoming ∧ highest < incoming then incoming else highest)
+  unfold nextHighest
   by_cases h : 0 < incoming ∧ highest < incoming
-  · rw [if_pos h]
+  · rw [ite_eq_left h]
     exact Nat.le_of_lt h.2
-  · rw [if_neg h]
+  · rw [ite_eq_right h]
+    exact Nat.le_refl highest
 
 
 /-! --------------------------------------------------------------------------
@@ -268,15 +266,21 @@ def ValidChunk (c : Chunk) : Prop :=
 
 theorem valid_chunk_cannot_overrun_file
     (c : Chunk) (h : ValidChunk c) :
-    c.offset + c.length ≤ c.fileSize := h.2.2.2.2.1
+    c.offset + c.length ≤ c.fileSize := by
+  rcases h with ⟨_, _, _, _, _, hOverrun, _⟩
+  exact hOverrun
 
 theorem valid_chunk_payload_is_bounded
     (c : Chunk) (h : ValidChunk c) :
-    c.length ≤ maxChunkBytes := h.2.1
+    c.length ≤ maxChunkBytes := by
+  rcases h with ⟨_, _, hBound, _, _, _, _⟩
+  exact hBound
 
 theorem valid_chunk_index_is_admissible
     (c : Chunk) (h : ValidChunk c) :
-    c.index < c.count := h.2.2.1
+    c.index < c.count := by
+  rcases h with ⟨_, _, _, hIndex, _, _, _⟩
+  exact hIndex
 
 /-! --------------------------------------------------------------------------
   9. Exactly-once chunk bookkeeping
@@ -324,27 +328,21 @@ def hostBufferTarget (packet bdp : Nat) : Nat :=
 theorem clamp_lower_bound
     (lo hi x : Nat) (hlo : lo ≤ hi) :
     lo ≤ clampNat lo hi x := by
-  unfold clampNat
   by_cases h₁ : hi < x
-  · rw [if_pos h₁]
-    exact hlo
-  · rw [if_neg h₁]
-    by_cases h₂ : x < lo
-    · rw [if_pos h₂]
-    · rw [if_neg h₂]
+  · simp [clampNat, h₁, hlo]
+  · by_cases h₂ : x < lo
+    · simp [clampNat, h₁, h₂]
+    · simp [clampNat, h₁, h₂]
       exact Nat.le_of_not_gt h₂
 
 theorem clamp_upper_bound
     (lo hi x : Nat) (hlo : lo ≤ hi) :
     clampNat lo hi x ≤ hi := by
-  unfold clampNat
   by_cases h₁ : hi < x
-  · rw [if_pos h₁]
-  · rw [if_neg h₁]
-    by_cases h₂ : x < lo
-    · rw [if_pos h₂]
-      exact hlo
-    · rw [if_neg h₂]
+  · simp [clampNat, h₁]
+  · by_cases h₂ : x < lo
+    · simp [clampNat, h₁, h₂, hlo]
+    · simp [clampNat, h₁, h₂]
       exact Nat.le_of_not_gt h₁
 
 theorem host_buffer_has_lower_bound
@@ -499,14 +497,18 @@ structure AllocationContract where
 
 theorem allocation_share_is_bounded
     (c : AllocationContract) (s : Share) (hs : s ∈ c.shares) :
-    Share.numerator s ≤ c.denominator :=
-  AllocationContract.bounded c s
+    Share.numerator s ≤ c.denominator := by
+  cases c with
+  | mk shares denominator conservation bounded =>
+      exact bounded s
 
 theorem allocation_conserves_work
     (c : AllocationContract) :
     List.foldl (fun acc s => acc + Share.numerator s) 0 c.shares =
-      c.denominator :=
-  AllocationContract.conservation c
+      c.denominator := by
+  cases c with
+  | mk shares denominator conservation bounded =>
+      exact conservation
 
 /-! --------------------------------------------------------------------------
   19. Network path selection
