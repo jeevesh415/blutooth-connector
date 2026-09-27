@@ -52,7 +52,7 @@ The application must never assume unrestricted Android control. Each capability 
 
 Every device relationship should be explicitly paired and revocable. Commands should be authenticated, sessions encrypted, and capabilities authorized independently. The receiver must reject unsupported or unauthorized operations.
 
-## Current milestone - 0.7
+## Current milestone - 0.8
 
 The repository now contains the bidirectional Bluetooth control plane, capability routing, adaptive command retries, foreground service ownership, encrypted BCL3 multipath bulk transfer, Android Network-specific path binding, and automated JVM/loopback verification.
 
