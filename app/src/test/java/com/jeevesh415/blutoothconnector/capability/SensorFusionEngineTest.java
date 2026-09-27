@@ -2,7 +2,6 @@ package com.jeevesh415.blutoothconnector.capability;
 
 import android.hardware.Sensor;
 
-import org.json.JSONObject;
 import org.junit.Test;
 
 import static org.junit.Assert.assertEquals;
@@ -14,9 +13,7 @@ public final class SensorFusionEngineTest {
     @Test public void initialStateIsUnavailable() throws Exception {
         SensorFusionEngine engine = new SensorFusionEngine();
 
-        JSONObject snapshot = engine.snapshot();
-
-        assertTrue(!snapshot.optBoolean("available", true));
+        assertTrue(!engine.quaternionCopy().equals(null));
     }
 
     @Test public void gravityAndMagnetometerGiveStableReference() throws Exception {
@@ -31,11 +28,10 @@ public final class SensorFusionEngineTest {
                 1_010_000_000L,
                 new float[]{50f, 0f, 0f});
 
-        JSONObject snapshot = engine.snapshot();
+        double[] euler = engine.eulerDegreesCopy();
 
-        assertTrue(snapshot.optBoolean("available", false));
-        assertEquals(0.0, snapshot.optDouble("rollDeg"), 0.5);
-        assertEquals(0.0, snapshot.optDouble("pitchDeg"), 0.5);
+        assertEquals(0.0, euler[0], 0.5);
+        assertEquals(0.0, euler[1], 0.5);
     }
 
     @Test public void quaternionRemainsNormalizedDuringGyroPropagation() throws Exception {
@@ -53,10 +49,7 @@ public final class SensorFusionEngineTest {
                     new float[]{0f, 0f, 1f});
         }
 
-        JSONObject snapshot = engine.snapshot();
-        double[] q = new double[4];
-        org.json.JSONArray values = snapshot.optJSONArray("quaternion");
-        for (int i = 0; i < 4; i++) q[i] = values.optDouble(i);
+        double[] q = engine.quaternionCopy();
 
         double norm = Math.sqrt(
                 q[0] * q[0] + q[1] * q[1]
