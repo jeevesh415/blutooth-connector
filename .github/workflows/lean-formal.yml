@@ -30,3 +30,6 @@ jobs:
 
       - name: Type-check formal proof
         run: lean formal/BlutoothConnectorFormalProof.lean
+
+      - name: Type-check concrete refinement
+        run: lean -I formal formal/BlutoothConnectorRefinement.lean
