@@ -336,10 +336,12 @@ public final class SensorControlCapability implements Capability {
      * We keep the UI field conservative and only expose known rate levels.
      */
     private static final class SensorDirectRate {
+        // Sensor#getHighestDirectReportRateLevel() is an ordered level:
+        // STOP=0, NORMAL=1, FAST=2, VERY_FAST=3.
         static final int UNKNOWN = 0;
-        static final int NORMAL = Sensor.DIRECT_RATE_NORMAL;
-        static final int FAST = Sensor.DIRECT_RATE_FAST;
-        static final int VERY_FAST = Sensor.DIRECT_RATE_VERY_FAST;
+        static final int NORMAL = 1;
+        static final int FAST = 2;
+        static final int VERY_FAST = 3;
 
         private SensorDirectRate() {}
     }
