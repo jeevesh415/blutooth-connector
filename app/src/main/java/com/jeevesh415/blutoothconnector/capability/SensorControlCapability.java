@@ -16,6 +16,7 @@ import org.json.JSONObject;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Remote sensor control plane.
@@ -32,6 +33,8 @@ public final class SensorControlCapability implements Capability {
     private final Map<Integer, android.hardware.TriggerEventListener> triggerListeners =
             new ConcurrentHashMap<>();
     private final SensorFusionEngine fusion = new SensorFusionEngine();
+    private final Map<String, Integer> fallbackHandles = new ConcurrentHashMap<>();
+    private final AtomicInteger nextFallbackHandle = new AtomicInteger(0x40000000);
 
     public SensorControlCapability(Context context) {
         manager = (SensorManager) context.getSystemService(Context.SENSOR_SERVICE);
@@ -101,7 +104,7 @@ public final class SensorControlCapability implements Capability {
                     .put("wakeUp", s.isWakeUpSensor())
                     .put("reportingMode", s.getReportingMode())
                     .put("dynamic", s.isDynamicSensor())
-                    .put("directChannelTypes", directChannelTypes(s))
+                    .put("stringType", s.getStringType())\n                    .put("maxDelayUs", Math.max(0, s.getMaxDelay()))\n                    .put("fifoMaxEventCount", s.getFifoMaxEventCount())\n                    .put("fifoReservedEventCount", s.getFifoReservedEventCount())\n                    .put("directChannelTypes", directChannelTypes(s))
                     .put("streamable",
                             s.getReportingMode() == Sensor.REPORTING_MODE_CONTINUOUS
                                     || s.getReportingMode() == Sensor.REPORTING_MODE_ON_CHANGE));
@@ -122,7 +125,7 @@ public final class SensorControlCapability implements Capability {
     }
 
     private JSONObject configure(JSONObject p) throws Exception {
-        Sensor sensor = find(p.optInt("handle", -1));
+        Sensor sensor = findByHandle(p.optInt("handle", -1));
         if (sensor == null) throw new IllegalArgumentException("Unknown sensor handle");
 
         int minUs = Math.max(1, sensor.getMinDelay());
@@ -139,7 +142,7 @@ public final class SensorControlCapability implements Capability {
         register(sensor, periodUs, maxLatencyUs);
 
         return new JSONObject()
-                .put("handle", sensor.getId())
+                .put("handle", handleFor(sensor))
                 .put("name", sensor.getName())
                 .put("requestedPeriodUs", requestedUs)
                 .put("effectivePeriodUs", periodUs)
@@ -171,7 +174,7 @@ public final class SensorControlCapability implements Capability {
                         float[] values = new float[event.values.length];
                         System.arraycopy(event.values, 0, values, 0, event.values.length);
                         SensorSample sample = new SensorSample(
-                                event.sensor.getId(),
+                                handleFor(event.sensor),
                                 event.sensor.getType(),
                                 event.timestamp,
                                 -1,
@@ -230,7 +233,7 @@ public final class SensorControlCapability implements Capability {
                 float[] values = new float[event.values.length];
                 System.arraycopy(event.values, 0, values, 0, event.values.length);
                 SensorSample sample = new SensorSample(
-                        event.sensor.getId(),
+                        handleFor(event.sensor),
                         event.sensor.getType(),
                         event.timestamp,
                         event.accuracy,
@@ -303,7 +306,7 @@ public final class SensorControlCapability implements Capability {
     private void cancelTrigger(int id) {
         android.hardware.TriggerEventListener listener = triggerListeners.remove(id);
         if (listener == null) return;
-        Sensor sensor = find(id);
+        Sensor sensor = findByHandle(id);
         if (sensor != null) {
             manager.cancelTriggerSensor(listener, sensor);
         }
