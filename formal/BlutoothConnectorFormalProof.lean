@@ -111,7 +111,8 @@ theorem accepted_replay_strictly_advances
     (h : AcceptsReplay highest incoming) :
     highest < nextHighest highest incoming := by
   unfold AcceptsReplay at h
-  simpa [nextHighest, h] using h.2
+  rw [nextHighest, if_pos h]
+  exact h.2
 
 theorem zero_sequence_is_rejected
     (highest : Nat) :
