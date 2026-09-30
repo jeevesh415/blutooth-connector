@@ -53,4 +53,13 @@ public class BluetoothThroughputOptimizerTest {
         assertEquals(0.0, optimizer.estimatedBytesPerSecond(), 0.0001);
         assertEquals(0.0, optimizer.estimatedRttMilliseconds(), 0.0001);
     }
+    @Test(expected = java.io.IOException.class)
+    public void chunkCountRejectsOverflow() throws Exception {
+        BluetoothL2capBulkTransport.validateChunkCount(1_000_001L);
+    }
+
+    @Test
+    public void chunkCountAcceptsBoundary() throws Exception {
+        BluetoothL2capBulkTransport.validateChunkCount(1_000_000L);
+    }
 }
