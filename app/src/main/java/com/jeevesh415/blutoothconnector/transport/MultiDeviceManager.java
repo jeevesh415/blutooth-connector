@@ -44,6 +44,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     private final BluetoothTransport transport;
     private final BluetoothCapabilityProfile bluetoothCapabilities;
     private final Context bulkContext;
+    private final BluetoothPerformanceController bluetoothPerformance;
     private final Map<String, DeviceSession> sessions = new ConcurrentHashMap<>();
     private final Map<String, BluetoothDevice> knownDevices = new ConcurrentHashMap<>();
     private final Map<String, Integer> retryAttempts = new ConcurrentHashMap<>();
@@ -65,6 +66,10 @@ public final class MultiDeviceManager implements AutoCloseable {
         this.bluetoothCapabilities = BluetoothCapabilityProfile.fromAdapter(adapter);
         if (listener != null) listeners.add(listener);
         this.bulkContext = context == null ? null : context.getApplicationContext();
+        this.bluetoothPerformance =
+                context == null
+                        ? null
+                        : new BluetoothPerformanceController(context);
 
         this.transport = new BluetoothTransport(adapter, new BluetoothTransport.Listener() {
             @Override public void onConnected(BluetoothDevice device, BluetoothSocket socket,
@@ -184,6 +189,9 @@ public final class MultiDeviceManager implements AutoCloseable {
                 if (bluetooth != null) {
                     byte[] token = BulkTransferProtocol.decodeToken(
                             bluetooth.tokenBase64);
+                    if (bluetoothPerformance != null) {
+                        bluetoothPerformance.beginHighThroughput(session.device);
+                    }
                     try {
                         long bytes = BluetoothL2capBulkTransport.send(
                                 session.device,
@@ -196,6 +204,9 @@ public final class MultiDeviceManager implements AutoCloseable {
                         // Fall through to the existing adaptive local-network
                         // multipath scheduler instead of losing the transfer.
                     } finally {
+                        if (bluetoothPerformance != null) {
+                            bluetoothPerformance.endHighThroughput(session.device);
+                        }
                         java.util.Arrays.fill(token, (byte) 0);
                     }
                 }
@@ -354,6 +365,9 @@ public final class MultiDeviceManager implements AutoCloseable {
                     System.currentTimeMillis(),
                     hello));
 
+            if (bluetoothPerformance != null) {
+                bluetoothPerformance.prepare(session.device);
+            }
             notifyConnected(session);
         } catch (Exception e) {
             try { socket.close(); } catch (Exception ignored) {}
@@ -399,6 +413,9 @@ public final class MultiDeviceManager implements AutoCloseable {
         if (sessions.remove(address, session)) {
             session.state = DeviceSession.State.RECONNECTING;
             try { session.connection.close(); } catch (Exception ignored) {}
+            if (bluetoothPerformance != null) {
+                bluetoothPerformance.closeDevice(session.device);
+            }
             transport.forgetSocket(address, session.socket);
             notifyDisconnected(session, error);
             retryLater(session.device);
@@ -460,6 +477,9 @@ public final class MultiDeviceManager implements AutoCloseable {
         scheduler.shutdownNow();
         bulkExecutor.shutdownNow();
         transport.close();
+        if (bluetoothPerformance != null) {
+            bluetoothPerformance.close();
+        }
         sessions.clear();
         knownDevices.clear();
         retryAttempts.clear();
