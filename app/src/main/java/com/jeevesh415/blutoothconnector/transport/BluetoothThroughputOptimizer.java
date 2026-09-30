@@ -4,12 +4,11 @@ import android.bluetooth.BluetoothAdapter;
 import android.os.Build;
 
 /**
- * Host-side throughput controller for large Bluetooth transfers.
+ * Host-side throughput controller.
  *
- * This class does not claim to increase the radio PHY rate. The controller,
- * negotiated PHY, channel conditions, and regulatory limits remain authoritative.
- * It maximizes application throughput by keeping the host-side pipe full while
- * adapting memory pressure to measured bandwidth and RTT.
+ * This class never claims to increase the radio PHY rate. It sizes application
+ * buffers from measured throughput and an independently measured RTT. A bulk
+ * transfer duration is a throughput sample only; it is never treated as RTT.
  */
 public final class BluetoothThroughputOptimizer {
     private static final int MIN_BUFFER = 64 * 1024;
@@ -29,26 +28,51 @@ public final class BluetoothThroughputOptimizer {
         return new Profile(le2m, coded);
     }
 
-    public synchronized void observe(long bytes, long elapsedNanos) {
-        if (bytes <= 0 || elapsedNanos <= 0) return;
+    /** Record a completed transfer as a throughput sample only. */
+    public synchronized void observeThroughput(long bytes, long elapsedNanos) {
+        if (bytes <= 0 || elapsedNanos <= 0) {
+            return;
+        }
         double seconds = elapsedNanos / 1_000_000_000.0;
         double rate = bytes / seconds;
         ewmaBytesPerSecond = ewmaBytesPerSecond == 0
                 ? rate
-                : EWMA_ALPHA * rate + (1.0 - EWMA_ALPHA) * ewmaBytesPerSecond;
+                : EWMA_ALPHA * rate
+                        + (1.0 - EWMA_ALPHA) * ewmaBytesPerSecond;
+    }
+
+    /** Record an actual request/response RTT sample. */
+    public synchronized void observeRtt(long rttNanos) {
+        if (rttNanos <= 0) {
+            return;
+        }
+        double seconds = rttNanos / 1_000_000_000.0;
         ewmaRttSeconds = ewmaRttSeconds == 0
                 ? seconds
-                : EWMA_ALPHA * seconds + (1.0 - EWMA_ALPHA) * ewmaRttSeconds;
+                : EWMA_ALPHA * seconds
+                        + (1.0 - EWMA_ALPHA) * ewmaRttSeconds;
     }
 
     /**
-     * Size the host pipe from the bandwidth-delay product:
-     * window ~= k * R * T, with a bounded safety margin.
+     * Backwards-compatible alias. The second argument is explicitly a duration
+     * of a throughput observation, not RTT.
      */
+    public void observe(long bytes, long elapsedNanos) {
+        observeThroughput(bytes, elapsedNanos);
+    }
+
     public synchronized int bufferBytes(int packetSize) {
         int packet = Math.max(1024, packetSize);
-        double rate = ewmaBytesPerSecond > 0 ? ewmaBytesPerSecond : 2_000_000.0;
-        double rtt = ewmaRttSeconds > 0 ? ewmaRttSeconds : 0.020;
+        double rate = ewmaBytesPerSecond > 0
+                ? ewmaBytesPerSecond
+                : 2_000_000.0;
+
+        // Until a real RTT sample exists, use a conservative 20 ms baseline.
+        // This is a sizing fallback, not a measurement.
+        double rtt = ewmaRttSeconds > 0
+                ? ewmaRttSeconds
+                : 0.020;
+
         long bdp = Math.round(rate * rtt);
         long target = Math.max(4L * packet, 4L * bdp);
         target = Math.max(MIN_BUFFER, Math.min(MAX_BUFFER, target));
@@ -61,6 +85,10 @@ public final class BluetoothThroughputOptimizer {
 
     public synchronized double estimatedMbps() {
         return ewmaBytesPerSecond * 8.0 / 1_000_000.0;
+    }
+
+    public synchronized double estimatedRttMilliseconds() {
+        return ewmaRttSeconds * 1000.0;
     }
 
     public static final class Profile {

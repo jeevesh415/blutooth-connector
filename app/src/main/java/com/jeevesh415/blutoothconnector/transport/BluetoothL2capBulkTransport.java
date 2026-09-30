@@ -15,6 +15,8 @@ import java.io.EOFException;
 import java.io.File;
 import java.io.FileInputStream;
 import java.io.FileOutputStream;
+import java.io.InputStream;
+import java.io.OutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
@@ -23,6 +25,12 @@ import java.security.SecureRandom;
 import java.util.UUID;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.TimeoutException;
+import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 /**
  * Native Bluetooth LE L2CAP CoC bulk transport.
@@ -51,6 +59,23 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private static final int MAX_CHUNKS = 1_000_000;
     private static final int CONNECT_TIMEOUT_MS = 8_000;
     private static final int IO_TIMEOUT_MS = 30_000;
+    private static final int WATCHDOG_PERIOD_MS = 5_000;
+
+    private static final ExecutorService CONNECT_EXECUTOR =
+            Executors.newCachedThreadPool(r -> {
+                Thread t = new Thread(r, "bluetooth-l2cap-connect");
+                t.setDaemon(true);
+                return t;
+            });
+    private static final java.util.concurrent.ScheduledExecutorService WATCHDOG =
+            Executors.newScheduledThreadPool(1, r -> {
+                Thread t = new Thread(r, "bluetooth-l2cap-watchdog");
+                t.setDaemon(true);
+                return t;
+            });
+
+    private static final Map<String, BluetoothThroughputOptimizer> OPTIMIZERS =
+            new ConcurrentHashMap<>();
 
     private final BluetoothAdapter adapter;
     private final ExecutorService acceptExecutor =
@@ -133,14 +158,17 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             int packet = safePacketSize(
                     closeable.getMaxReceivePacketSize());
             int pipeBuffer = throughputOptimizer.bufferBytes(packet);
+            AtomicLong lastActivity = new AtomicLong(System.nanoTime());
             DataInputStream in = new DataInputStream(
                     new BufferedInputStream(
-                            closeable.getInputStream(),
+                            new ActivityInputStream(closeable.getInputStream(), lastActivity),
                             pipeBuffer));
             DataOutputStream out = new DataOutputStream(
                     new BufferedOutputStream(
-                            closeable.getOutputStream(),
+                            new ActivityOutputStream(closeable.getOutputStream(), lastActivity),
                             pipeBuffer));
+            java.util.concurrent.ScheduledFuture<?> watchdog =
+                    startWatchdog(closeable, lastActivity);
 
             if (in.readInt() != MAGIC
                     || in.readInt() != VERSION) {
@@ -294,27 +322,32 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         int chunkSize = CHUNK_BYTES;
         int chunkCount = (int) ((file.length() + chunkSize - 1L) / chunkSize);
 
-        BluetoothSocket socket =
-                device.createL2capChannel(remotePsm);
+        BluetoothSocket socket = device.createL2capChannel(remotePsm);
         final long transferStartedNanos = System.nanoTime();
+        final String deviceAddress = device.getAddress();
         final BluetoothThroughputOptimizer transferOptimizer =
-                new BluetoothThroughputOptimizer();
+                OPTIMIZERS.computeIfAbsent(
+                        deviceAddress == null ? "unknown" : deviceAddress,
+                        ignored -> new BluetoothThroughputOptimizer());
         try (BluetoothSocket closeable = socket) {
-            closeable.connect();
+            connectWithTimeout(closeable, CONNECT_TIMEOUT_MS);
 
             int packet = safePacketSize(
                     closeable.getMaxTransmitPacketSize());
             int pipeBuffer = transferOptimizer.bufferBytes(packet);
             int writeQuantum = Math.max(16 * 1024, packet);
 
+            AtomicLong lastActivity = new AtomicLong(System.nanoTime());
             DataInputStream in = new DataInputStream(
                     new BufferedInputStream(
-                            closeable.getInputStream(),
+                            new ActivityInputStream(closeable.getInputStream(), lastActivity),
                             pipeBuffer));
             DataOutputStream out = new DataOutputStream(
                     new BufferedOutputStream(
-                            closeable.getOutputStream(),
+                            new ActivityOutputStream(closeable.getOutputStream(), lastActivity),
                             pipeBuffer));
+            java.util.concurrent.ScheduledFuture<?> watchdog =
+                    startWatchdog(closeable, lastActivity);
 
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
@@ -388,7 +421,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             }
 
             out.flush();
-            transferOptimizer.observe(
+            transferOptimizer.observeThroughput(
                     file.length(),
                     Math.max(1L, System.nanoTime() - transferStartedNanos));
             int status = in.readInt();
@@ -397,6 +430,81 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                         "Bluetooth bulk receiver rejected transfer: " + status);
             }
             return file.length();
+        }
+    }
+
+    private static void connectWithTimeout(
+            BluetoothSocket socket, long timeoutMs) throws Exception {
+        Future<?> future = CONNECT_EXECUTOR.submit(
+                (java.util.concurrent.Callable<Void>) () -> {
+                    socket.connect();
+                    return null;
+                });
+        try {
+            future.get(timeoutMs, TimeUnit.MILLISECONDS);
+        } catch (TimeoutException timeout) {
+            future.cancel(true);
+            try { socket.close(); } catch (Exception ignored) {}
+            throw new IOException("Bluetooth L2CAP connect timed out", timeout);
+        } catch (java.util.concurrent.ExecutionException execution) {
+            Throwable cause = execution.getCause();
+            if (cause instanceof Exception) throw (Exception) cause;
+            throw new IOException("Bluetooth L2CAP connect failed", cause);
+        } finally {
+            future.cancel(true);
+        }
+    }
+
+    private static java.util.concurrent.ScheduledFuture<?> startWatchdog(
+            BluetoothSocket socket, AtomicLong lastActivity) {
+        final java.util.concurrent.ScheduledFuture<?>[] holder =
+                new java.util.concurrent.ScheduledFuture<?>[1];
+        holder[0] = WATCHDOG.scheduleAtFixedRate(() -> {
+            if (!socket.isConnected()) {
+                holder[0].cancel(false);
+                return;
+            }
+            long idleMs = TimeUnit.NANOSECONDS.toMillis(
+                    System.nanoTime() - lastActivity.get());
+            if (idleMs > IO_TIMEOUT_MS) {
+                try { socket.close(); } catch (Exception ignored) {}
+                holder[0].cancel(false);
+            }
+        }, WATCHDOG_PERIOD_MS, WATCHDOG_PERIOD_MS, TimeUnit.MILLISECONDS);
+        return holder[0];
+    }
+
+    private static final class ActivityInputStream extends java.io.FilterInputStream {
+        private final AtomicLong activity;
+        ActivityInputStream(InputStream in, AtomicLong activity) {
+            super(in);
+            this.activity = activity;
+        }
+        @Override public int read() throws IOException {
+            int value = super.read();
+            activity.set(System.nanoTime());
+            return value;
+        }
+        @Override public int read(byte[] b, int off, int len) throws IOException {
+            int value = super.read(b, off, len);
+            activity.set(System.nanoTime());
+            return value;
+        }
+    }
+
+    private static final class ActivityOutputStream extends java.io.FilterOutputStream {
+        private final AtomicLong activity;
+        ActivityOutputStream(OutputStream out, AtomicLong activity) {
+            super(out);
+            this.activity = activity;
+        }
+        @Override public void write(int b) throws IOException {
+            super.write(b);
+            activity.set(System.nanoTime());
+        }
+        @Override public void write(byte[] b, int off, int len) throws IOException {
+            super.write(b, off, len);
+            activity.set(System.nanoTime());
         }
     }
 
