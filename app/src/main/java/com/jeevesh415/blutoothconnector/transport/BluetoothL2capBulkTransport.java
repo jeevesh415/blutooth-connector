@@ -445,13 +445,21 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
     private static java.util.concurrent.ScheduledFuture<?> startWatchdog(
             BluetoothSocket socket, AtomicLong lastActivity) {
-        return WATCHDOG.scheduleAtFixedRate(() -> {
+        final java.util.concurrent.ScheduledFuture<?>[] holder =
+                new java.util.concurrent.ScheduledFuture<?>[1];
+        holder[0] = WATCHDOG.scheduleAtFixedRate(() -> {
+            if (!socket.isConnected()) {
+                holder[0].cancel(false);
+                return;
+            }
             long idleMs = TimeUnit.NANOSECONDS.toMillis(
                     System.nanoTime() - lastActivity.get());
             if (idleMs > IO_TIMEOUT_MS) {
                 try { socket.close(); } catch (Exception ignored) {}
+                holder[0].cancel(false);
             }
         }, WATCHDOG_PERIOD_MS, WATCHDOG_PERIOD_MS, TimeUnit.MILLISECONDS);
+        return holder[0];
     }
 
     private static final class ActivityInputStream extends java.io.FilterInputStream {
