@@ -318,6 +318,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                             DeviceSession current = sessionHolder[0];
                             if (current != null
                                     && sessions.remove(address, current)) {
+                                BluetoothL2capBulkTransport.forgetPeer(address);
                                 transport.forgetSocket(address, socket);
                                 current.state =
                                         DeviceSession.State.RECONNECTING;
