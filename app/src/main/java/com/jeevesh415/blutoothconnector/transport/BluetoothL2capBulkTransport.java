@@ -333,9 +333,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         String name = file.getName();
         int chunkSize = CHUNK_BYTES;
         long computedChunkCount = (file.length() + chunkSize - 1L) / chunkSize;
-        if (computedChunkCount < 1 || computedChunkCount > MAX_CHUNKS) {
-            throw new IOException("Bluetooth transfer exceeds maximum chunk count");
-        }
+        validateChunkCount(computedChunkCount);
         int chunkCount = (int) computedChunkCount;
 
         BluetoothSocket socket = device.createL2capChannel(remotePsm);
@@ -521,6 +519,12 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         @Override public void write(byte[] b, int off, int len) throws IOException {
             super.write(b, off, len);
             activity.set(System.nanoTime());
+        }
+    }
+
+    static void validateChunkCount(long chunkCount) throws IOException {
+        if (chunkCount < 1 || chunkCount > MAX_CHUNKS) {
+            throw new IOException("Bluetooth transfer exceeds maximum chunk count");
         }
     }
 
