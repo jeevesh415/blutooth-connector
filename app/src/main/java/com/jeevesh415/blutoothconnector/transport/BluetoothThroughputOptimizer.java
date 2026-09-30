@@ -92,6 +92,11 @@ public final class BluetoothThroughputOptimizer {
         return ewmaRttSeconds * 1000.0;
     }
 
+    public synchronized void reset() {
+        ewmaBytesPerSecond = 0;
+        ewmaRttSeconds = 0;
+    }
+
     public static final class Profile {
         public final boolean le2mPhySupported;
         public final boolean leCodedPhySupported;
