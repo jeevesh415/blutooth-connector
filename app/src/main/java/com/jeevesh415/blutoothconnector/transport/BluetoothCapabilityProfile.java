@@ -3,6 +3,7 @@ package com.jeevesh415.blutoothconnector.transport;
 import android.annotation.SuppressLint;
 import android.bluetooth.BluetoothAdapter;
 import android.os.Build;
+import org.json.JSONException;
 import org.json.JSONObject;
 
 /** Runtime Bluetooth capability negotiation; Android does not expose a reliable version number. */
@@ -25,9 +26,9 @@ public final class BluetoothCapabilityProfile {
     @SuppressLint("MissingPermission")
     public static BluetoothCapabilityProfile fromAdapter(BluetoothAdapter a) {
         if (a==null) throw new IllegalArgumentException("Bluetooth adapter");
-        boolean classic=a.getName()!=null || a.getBondedDevices()!=null;
-        boolean le=a.getBluetoothLeScanner()!=null;
-        boolean l2cap=Build.VERSION.SDK_INT>=29;
+        boolean classic = Build.VERSION.SDK_INT >= 5;
+        boolean le = Build.VERSION.SDK_INT >= 21 && a.getBluetoothLeScanner() != null;
+        boolean l2cap = Build.VERSION.SDK_INT >= 29 && le;
         boolean twoM=Build.VERSION.SDK_INT>=26 && a.isLe2MPhySupported();
         boolean coded=Build.VERSION.SDK_INT>=26 && a.isLeCodedPhySupported();
         boolean extended=Build.VERSION.SDK_INT>=26 && a.isLeExtendedAdvertisingSupported();
@@ -55,7 +56,7 @@ public final class BluetoothCapabilityProfile {
         return "none";
     }
 
-    public JSONObject toJson() {
+    public JSONObject toJson() throws JSONException {
         return new JSONObject().put("apiLevel",apiLevel).put("generation",generation)
                 .put("classicRfcomm",classicRfcomm).put("le",le).put("leL2capCoc",leL2capCoc)
                 .put("le2mPhy",le2mPhy).put("leCodedPhy",leCodedPhy)
