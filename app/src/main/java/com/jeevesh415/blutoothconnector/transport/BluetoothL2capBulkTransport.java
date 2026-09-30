@@ -77,6 +77,18 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private static final Map<String, BluetoothThroughputOptimizer> OPTIMIZERS =
             new ConcurrentHashMap<>();
 
+    public static void observeRtt(String deviceAddress, long rttNanos) {
+        if (deviceAddress == null || deviceAddress.isEmpty()) return;
+        OPTIMIZERS.computeIfAbsent(deviceAddress, ignored -> new BluetoothThroughputOptimizer())
+                .observeRtt(rttNanos);
+    }
+
+    public static void forgetPeer(String deviceAddress) {
+        if (deviceAddress != null && !deviceAddress.isEmpty()) {
+            OPTIMIZERS.remove(deviceAddress);
+        }
+    }
+
     private final BluetoothAdapter adapter;
     private final ExecutorService acceptExecutor =
             Executors.newSingleThreadExecutor();
@@ -320,10 +332,13 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         String transferId = UUID.randomUUID().toString();
         String name = file.getName();
         int chunkSize = CHUNK_BYTES;
-        int chunkCount = (int) ((file.length() + chunkSize - 1L) / chunkSize);
+        long computedChunkCount = (file.length() + chunkSize - 1L) / chunkSize;
+        if (computedChunkCount < 1 || computedChunkCount > MAX_CHUNKS) {
+            throw new IOException("Bluetooth transfer exceeds maximum chunk count");
+        }
+        int chunkCount = (int) computedChunkCount;
 
         BluetoothSocket socket = device.createL2capChannel(remotePsm);
-        final long transferStartedNanos = System.nanoTime();
         final String deviceAddress = device.getAddress();
         final BluetoothThroughputOptimizer transferOptimizer =
                 OPTIMIZERS.computeIfAbsent(
@@ -331,6 +346,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                         ignored -> new BluetoothThroughputOptimizer());
         try (BluetoothSocket closeable = socket) {
             connectWithTimeout(closeable, CONNECT_TIMEOUT_MS);
+            final long transferStartedNanos = System.nanoTime();
 
             int packet = safePacketSize(
                     closeable.getMaxTransmitPacketSize());
@@ -413,7 +429,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                     out.writeInt(ciphertext.length);
                     out.write(iv);
                     out.write(authorization);
-                    writePacketAligned(out, ciphertext, writeQuantum);
+                    writeChunked(out, ciphertext, writeQuantum);
                     java.util.Arrays.fill(ciphertext, (byte) 0);
                 }
             } finally {
@@ -508,15 +524,14 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         }
     }
 
-    private static void writePacketAligned(
+    private static void writeChunked(
             DataOutputStream out,
             byte[] data,
             int quantum) throws IOException {
         int offset = 0;
+        int writeSize = Math.max(quantum, 64 * 1024);
         while (offset < data.length) {
-            int length = Math.min(
-                    data.length - offset,
-                    Math.max(quantum, 64 * 1024));
+            int length = Math.min(data.length - offset, writeSize);
             out.write(data, offset, length);
             offset += length;
         }
