@@ -435,7 +435,11 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
     private static void connectWithTimeout(
             BluetoothSocket socket, long timeoutMs) throws Exception {
-        Future<?> future = CONNECT_EXECUTOR.submit(socket::connect);
+        Future<?> future = CONNECT_EXECUTOR.submit(
+                (java.util.concurrent.Callable<Void>) () -> {
+                    socket.connect();
+                    return null;
+                });
         try {
             future.get(timeoutMs, TimeUnit.MILLISECONDS);
         } catch (TimeoutException timeout) {
