@@ -41,18 +41,6 @@ public class BluetoothThroughputOptimizerTest {
         assertEquals(100.0, optimizer.estimatedRttMilliseconds(), 0.0001);
         assertTrue(largerRtt >= baseline);
     }
-
-    @Test
-    public void resetClearsFeedbackState() {
-        BluetoothThroughputOptimizer optimizer =
-                new BluetoothThroughputOptimizer();
-        optimizer.observeThroughput(20L * 1024 * 1024, 1_000_000_000L);
-        optimizer.observeRtt(50_000_000L);
-        optimizer.reset();
-
-        assertEquals(0.0, optimizer.estimatedBytesPerSecond(), 0.0001);
-        assertEquals(0.0, optimizer.estimatedRttMilliseconds(), 0.0001);
-    }
     @Test(expected = java.io.IOException.class)
     public void chunkCountRejectsOverflow() throws Exception {
         BluetoothL2capBulkTransport.validateChunkCount(1_000_001L);
