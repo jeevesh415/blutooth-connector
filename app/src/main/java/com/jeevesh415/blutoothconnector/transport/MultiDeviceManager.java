@@ -304,6 +304,9 @@ public final class MultiDeviceManager implements AutoCloseable {
                                             (System.nanoTime() - sent) / 1_000_000L;
                                     if (rttMs >= 0 && rttMs < 300_000) {
                                         current.metrics.observe(rttMs);
+                                        BluetoothL2capBulkTransport.observeRtt(
+                                                address,
+                                                System.nanoTime() - sent);
                                     }
                                 }
                             }
@@ -397,6 +400,7 @@ public final class MultiDeviceManager implements AutoCloseable {
     private void closeSession(DeviceSession session, Exception error) {
         String address = session.address();
         if (sessions.remove(address, session)) {
+            BluetoothL2capBulkTransport.forgetPeer(address);
             session.state = DeviceSession.State.RECONNECTING;
             try { session.connection.close(); } catch (Exception ignored) {}
             transport.forgetSocket(address, session.socket);
