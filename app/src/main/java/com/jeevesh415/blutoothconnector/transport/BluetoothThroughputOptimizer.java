@@ -5,6 +5,7 @@ import android.os.Build;
 
 /**
  * Host-side throughput controller.
+ * Verification baseline: throughput and RTT feedback are tracked independently.
  *
  * This class never claims to increase the radio PHY rate. It sizes application
  * buffers from measured throughput and an independently measured RTT. A bulk
