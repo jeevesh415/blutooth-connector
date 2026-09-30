@@ -29,6 +29,8 @@ import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.Map;
 
 /**
  * Native Bluetooth LE L2CAP CoC bulk transport.
@@ -71,6 +73,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                 t.setDaemon(true);
                 return t;
             });
+
+    private static final Map<String, BluetoothThroughputOptimizer> OPTIMIZERS =
+            new ConcurrentHashMap<>();
 
     private final BluetoothAdapter adapter;
     private final ExecutorService acceptExecutor =
@@ -319,8 +324,11 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
         BluetoothSocket socket = device.createL2capChannel(remotePsm);
         final long transferStartedNanos = System.nanoTime();
+        final String deviceAddress = device.getAddress();
         final BluetoothThroughputOptimizer transferOptimizer =
-                new BluetoothThroughputOptimizer();
+                OPTIMIZERS.computeIfAbsent(
+                        deviceAddress == null ? "unknown" : deviceAddress,
+                        ignored -> new BluetoothThroughputOptimizer());
         try (BluetoothSocket closeable = socket) {
             connectWithTimeout(closeable, CONNECT_TIMEOUT_MS);
 
@@ -413,7 +421,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             }
 
             out.flush();
-            transferOptimizer.observe(
+            transferOptimizer.observeThroughput(
                     file.length(),
                     Math.max(1L, System.nanoTime() - transferStartedNanos));
             int status = in.readInt();
