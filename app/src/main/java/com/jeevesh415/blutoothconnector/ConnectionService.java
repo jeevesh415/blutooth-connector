@@ -379,8 +379,13 @@ public final class ConnectionService extends Service {
         MultiDeviceManager manager = peers;
         if (manager == null) return;
 
-        if (rotateBulkToken && bluetoothBulk != null) {
-            bluetoothBulk.rotateAuthorizationToken();
+        if (rotateBulkToken) {
+            if (bluetoothBulk != null) {
+                bluetoothBulk.rotateAuthorizationToken();
+            }
+            if (bulk != null) {
+                bulk.rotateAuthorizationToken();
+            }
         }
 
         for (DeviceSession session :
@@ -829,7 +834,7 @@ public final class ConnectionService extends Service {
                 }
             }
 
-            if (bulk != null) {
+            if (bulkAuthorized && bulk != null) {
                 for (TcpBulkEndpoint.Endpoint endpoint :
                         bulk.endpoints()) {
                     endpoints.put(
