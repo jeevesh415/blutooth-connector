@@ -152,6 +152,14 @@ public final class TcpBulkEndpoint implements AutoCloseable {
         return token == null ? null : token.clone();
     }
 
+    public synchronized void rotateAuthorizationToken() {
+        byte[] replacement = new byte[BulkTransferProtocol.TOKEN_BYTES];
+        random.nextBytes(replacement);
+        byte[] old = token;
+        token = replacement;
+        if (old != null) java.util.Arrays.fill(old, (byte) 0);
+    }
+
     public synchronized int port() {
         return server == null
                 ? -1
