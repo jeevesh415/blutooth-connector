@@ -315,12 +315,19 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         if (file == null || !file.isFile() || file.length() < 1) {
             throw new IllegalArgumentException("Not a non-empty file");
         }
+        final long sourceSize = file.length();
+        if (sourceSize > MAX_TRANSFER_BYTES) {
+            throw new IllegalArgumentException("Bluetooth transfer exceeds size limit");
+        }
 
         byte[] hash = BulkTransferProtocol.sha256(file);
+        if (file.length() != sourceSize) {
+            throw new IOException("Source file changed size during hashing");
+        }
         String transferId = UUID.randomUUID().toString();
         String name = file.getName();
         int chunkSize = CHUNK_BYTES;
-        long computedChunkCount = (file.length() + chunkSize - 1L) / chunkSize;
+        long computedChunkCount = (sourceSize + chunkSize - 1L) / chunkSize;
         validateChunkCount(computedChunkCount);
         int chunkCount = (int) computedChunkCount;
 
@@ -354,7 +361,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
             writeString(out, transferId, MAX_ID_BYTES);
-            out.writeLong(file.length());
+            out.writeLong(sourceSize);
             out.writeInt(chunkSize);
             out.writeInt(chunkCount);
             out.write(hash);
@@ -366,7 +373,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                 for (int index = 0; index < chunkCount; index++) {
                     long offset = (long) index * chunkSize;
                     int expected = (int) Math.min(
-                            chunkSize, file.length() - offset);
+                            chunkSize, sourceSize - offset);
 
                     int read = 0;
                     while (read < expected) {
@@ -382,7 +389,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                             transferId, index);
                     byte[] aad = MultipathCrypto.descriptor(
                             transferId,
-                            file.length(),
+                            sourceSize,
                             offset,
                             expected,
                             hash,
@@ -394,7 +401,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                             MultipathCrypto.authorizationTag(
                                     token,
                                     transferId,
-                                    file.length(),
+                                    sourceSize,
                                     offset,
                                     expected,
                                     hash,
@@ -423,15 +430,18 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             }
 
             out.flush();
+            if (file.length() != sourceSize) {
+                throw new IOException("Source file changed during Bluetooth transfer");
+            }
             transferOptimizer.observeThroughput(
-                    file.length(),
+                    sourceSize,
                     Math.max(1L, System.nanoTime() - transferStartedNanos));
             int status = in.readInt();
             if (status != 0) {
                 throw new IOException(
                         "Bluetooth bulk receiver rejected transfer: " + status);
             }
-            return file.length();
+            return sourceSize;
         }
     }
 
