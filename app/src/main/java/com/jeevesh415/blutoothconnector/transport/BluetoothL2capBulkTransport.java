@@ -151,6 +151,14 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         return value == null ? null : value.clone();
     }
 
+    public synchronized void rotateAuthorizationToken() {
+        byte[] replacement = new byte[MultipathCrypto.TOKEN_BYTES];
+        random.nextBytes(replacement);
+        byte[] old = token;
+        token = replacement;
+        if (old != null) java.util.Arrays.fill(old, (byte) 0);
+    }
+
     private void acceptLoop(BluetoothServerSocket expected) {
         while (server == expected) {
             try {
