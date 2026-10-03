@@ -32,6 +32,7 @@ public final class MultipathFileTransfer {
     private static final int MAX_ID = 64;
     private static final int CHUNK = 1024 * 1024;
     private static final int MAX_CHUNKS = 1_000_000;
+    private static final long MAX_TRANSFER_BYTES = 8L * 1024L * 1024L * 1024L;
 
     private static final class Candidate {
         final BulkEndpointInfo endpoint;
@@ -99,6 +100,10 @@ public final class MultipathFileTransfer {
         if (file.length() == 0) {
             throw new IllegalArgumentException(
                     "Empty files are not supported");
+        }
+        if (file.length() > MAX_TRANSFER_BYTES) {
+            throw new IllegalArgumentException(
+                    "File exceeds multipath transfer size limit");
         }
         if (endpoints == null || endpoints.isEmpty()) {
             throw new IllegalArgumentException("No paths");
