@@ -386,6 +386,12 @@ public final class ConnectionService extends Service {
             if (bulk != null) {
                 bulk.rotateAuthorizationToken();
             }
+            if (wifiAware != null) {
+                try {
+                    wifiAware.close();
+                } catch (Exception ignored) {}
+                wifiAware = null;
+            }
         }
 
         for (DeviceSession session :
