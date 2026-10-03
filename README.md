@@ -82,7 +82,7 @@ When Phone B exposes a local TCP endpoint, the controller can move bulk data to 
 
 Bulk transfers use:
 
-- 1 MiB application buffers.
+- 1 MiB application buffers on the IP multipath path; Bluetooth L2CAP uses controller-aware host buffering.
 - Resume from the receiver's existing partial-file length.
 - A 32-byte cryptographic transfer token.
 - Final SHA-256 end-to-end integrity verification.
@@ -90,6 +90,8 @@ Bulk transfers use:
 - Path-safe destination names.
 - TCP keep-alive and large socket buffers.
 - Bounded retry/backoff at the caller.
+- An explicit per-peer file-transfer authorization gate; revocation rotates the bulk bearer token.
+- An 8 GiB per-transfer limit and a 16 GiB aggregate partial-file budget.
 
 There is deliberately no promise of zero physical link failures. The engineering target is **fault tolerance**: if the radio or network drops, the session detects it, reconnects where possible, and bulk transfers can resume without restarting the entire file.
 
@@ -126,7 +128,7 @@ The current stable build targets SDK 36 (Android 15) with a minimum of Android 1
 
 ## Security boundary
 
-Bluetooth pairing is the transport relationship, not authorization for high-risk actions. Bulk transfer uses per-transfer bearer tokens, HMAC authorization proofs, AES-256-GCM, deterministic transfer/chunk-bound 96-bit GCM nonces, and a final SHA-256 integrity check. Retries reuse the same nonce only for the same authenticated transfer/chunk; a different chunk or transfer derives a different nonce. Remote Accessibility control additionally requires an explicit peer grant on the receiving phone.
+Bluetooth pairing is the transport relationship, not authorization for high-risk actions or bulk file transfer. Bulk transfer uses per-transfer bearer tokens, HMAC authorization proofs, AES-256-GCM, deterministic transfer/chunk-bound 96-bit GCM nonces, and a final SHA-256 integrity check. Retries reuse the same nonce only for the same authenticated transfer/chunk; a different chunk or transfer derives a different nonce. Remote Accessibility control additionally requires an explicit peer grant on the receiving phone.
 
 The control plane now adds an Android Keystore application identity and a signed per-connection nonce transcript, with trust-on-first-use pinning per bonded Bluetooth address. This is stronger than treating Bluetooth pairing as application authorization, but it is still not a full interactive enrollment ceremony or certificate authority.
 
