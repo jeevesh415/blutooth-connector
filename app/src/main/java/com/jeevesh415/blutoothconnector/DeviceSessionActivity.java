@@ -22,6 +22,7 @@ import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 
+import com.jeevesh415.blutoothconnector.control.BulkTransferAuthorization;
 import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
@@ -140,6 +141,10 @@ public final class DeviceSessionActivity extends Activity {
                 v -> authorize(true));
         addButton(root, "×  Revoke remote control", panel2, textPrimary,
                 v -> authorize(false));
+        addButton(root, "⇧  Authorize file transfer", panel2, textPrimary,
+                v -> authorizeBulk(true));
+        addButton(root, "×  Revoke file transfer", panel2, textPrimary,
+                v -> authorizeBulk(false));
         addButton(root, "⚙  Open Accessibility settings", panel2, textPrimary,
                 v -> openAccessibility());
 
@@ -456,6 +461,27 @@ public final class DeviceSessionActivity extends Activity {
         startActivityForResult(manager.createScreenCaptureIntent(),
                 REQUEST_SCREEN_CAPTURE);
         status.setText("Approve Android's screen-capture prompt.");
+    }
+
+    private void authorizeBulk(boolean allow) {
+        DeviceSession session = selectedSession();
+        if (session == null) {
+            status.setText("No connected device.");
+            return;
+        }
+        try {
+            if (allow) {
+                BulkTransferAuthorization.authorize(this, session.address());
+            } else {
+                BulkTransferAuthorization.revoke(this, session.address());
+            }
+            if (service != null) service.refreshCapabilities();
+            status.setText(allow
+                    ? "File transfer authorized for this peer."
+                    : "File transfer revoked for this peer.");
+        } catch (Exception error) {
+            status.setText("File-transfer authorization failed: " + error.getMessage());
+        }
     }
 
     private void authorize(boolean allow) {
