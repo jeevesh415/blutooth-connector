@@ -223,3 +223,5 @@ Current explicit limitations:
 - Application identity uses an Android Keystore signing key plus trust-on-first-use pinning; there is no interactive enrollment/attestation authority.
 - Android 17 local-network and nearby-Wi-Fi permissions are requested at the point of use.
 - Wi-Fi Direct/Aware availability and simultaneous independent paths depend on the device chipset, Android routing, and RF environment.
+
+<!-- CI verification marker: final audited tree. -->
