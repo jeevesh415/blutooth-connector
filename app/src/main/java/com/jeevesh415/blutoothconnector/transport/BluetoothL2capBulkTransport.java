@@ -166,9 +166,11 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     }
 
     private void receive(BluetoothSocket socket) {
+        File partial = null;
+        boolean promoted = false;
+        java.util.concurrent.ScheduledFuture<?> watchdog = null;
         try (BluetoothSocket closeable = socket) {
-            int packet = safePacketSize(
-                    closeable.getMaxReceivePacketSize());
+            int packet = safePacketSize(closeable.getMaxReceivePacketSize());
             int pipeBuffer = throughputOptimizer.bufferBytes(packet);
             AtomicLong lastActivity = new AtomicLong(System.nanoTime());
             DataInputStream in = new DataInputStream(
@@ -179,11 +181,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                     new BufferedOutputStream(
                             new ActivityOutputStream(closeable.getOutputStream(), lastActivity),
                             pipeBuffer));
-            java.util.concurrent.ScheduledFuture<?> watchdog =
-                    startWatchdog(closeable, lastActivity);
+            watchdog = startWatchdog(closeable, lastActivity);
 
-            if (in.readInt() != MAGIC
-                    || in.readInt() != VERSION) {
+            if (in.readInt() != MAGIC || in.readInt() != VERSION) {
                 throw new IOException("Unsupported Bluetooth bulk protocol");
             }
 
@@ -196,6 +196,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             String name = readString(in, MAX_NAME_BYTES);
 
             if (fileSize < 1
+                    || fileSize > MAX_TRANSFER_BYTES
                     || chunkSize < 16 * 1024
                     || chunkSize > CHUNK_BYTES
                     || chunkCount < 1
@@ -204,12 +205,16 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             }
 
             File destination = safeDestination(directory, name);
-            File partial = new File(
+            partial = new File(
                     destination.getParentFile(),
                     "." + destination.getName() + "." + transferId + ".part");
 
-            try (RandomAccessFile output =
-                         new RandomAccessFile(partial, "rw")) {
+            if (directory.getUsableSpace() < fileSize
+                    || partialBytes(directory) + fileSize > MAX_PARTIAL_BYTES) {
+                throw new IOException("Insufficient Bluetooth bulk storage budget");
+            }
+
+            try (RandomAccessFile output = new RandomAccessFile(partial, "rw")) {
                 output.setLength(fileSize);
 
                 for (int expectedIndex = 0;
@@ -236,8 +241,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                     in.readFully(ciphertext);
 
                     long offset = (long) index * chunkSize;
-                    long expectedLength = Math.min(
-                            chunkSize, fileSize - offset);
+                    long expectedLength = Math.min(chunkSize, fileSize - offset);
                     if (offset < 0
                             || offset >= fileSize
                             || plaintextLength != expectedLength) {
@@ -245,38 +249,16 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                     }
 
                     if (!MultipathCrypto.verifyAuthorizationTag(
-                            token,
-                            authorization,
-                            transferId,
-                            fileSize,
-                            offset,
-                            plaintextLength,
-                            expectedHash,
-                            index,
-                            chunkCount,
-                            name,
-                            iv)) {
-                        throw new SecurityException(
-                                "Bluetooth bulk authorization failed");
+                            token, authorization, transferId, fileSize, offset,
+                            plaintextLength, expectedHash, index, chunkCount, name, iv)) {
+                        throw new SecurityException("Bluetooth bulk authorization failed");
                     }
 
                     byte[] aad = MultipathCrypto.descriptor(
-                            transferId,
-                            fileSize,
-                            offset,
-                            plaintextLength,
-                            expectedHash,
-                            index,
-                            chunkCount,
-                            name,
-                            iv);
+                            transferId, fileSize, offset, plaintextLength,
+                            expectedHash, index, chunkCount, name, iv);
                     byte[] plaintext = MultipathCrypto.decrypt(
-                            token,
-                            transferId,
-                            index,
-                            ciphertext,
-                            aad,
-                            iv);
+                            token, transferId, index, ciphertext, aad, iv);
 
                     output.seek(offset);
                     output.write(plaintext);
@@ -287,8 +269,6 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
             byte[] actualHash = BulkTransferProtocol.sha256(partial);
             if (!MessageDigest.isEqual(expectedHash, actualHash)) {
-                //noinspection ResultOfMethodCallIgnored
-                partial.delete();
                 out.writeInt(2);
                 out.flush();
                 throw new IOException("Bluetooth bulk SHA-256 mismatch");
@@ -300,14 +280,22 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             if (!partial.renameTo(destination)) {
                 throw new IOException("Cannot promote Bluetooth transfer");
             }
+            promoted = true;
 
             out.writeInt(0);
             out.flush();
             if (listener != null) listener.onTransferComplete(destination);
         } catch (Exception error) {
             if (listener != null) listener.onError(error);
+        } finally {
+            if (watchdog != null) watchdog.cancel(false);
+            if (!promoted && partial != null && partial.exists()) {
+                //noinspection ResultOfMethodCallIgnored
+                partial.delete();
+            }
         }
     }
+
 
     @SuppressLint("MissingPermission")
     public static long send(
@@ -539,6 +527,19 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             out.write(data, offset, length);
             offset += length;
         }
+    }
+
+    private static long partialBytes(File directory) {
+        File[] files = directory.listFiles((dir, name) ->
+                name != null && name.endsWith(".part"));
+        if (files == null) return 0L;
+        long total = 0L;
+        for (File file : files) {
+            long length = file.length();
+            if (Long.MAX_VALUE - total < length) return Long.MAX_VALUE;
+            total += length;
+        }
+        return total;
     }
 
     private static int safePacketSize(int value) {
