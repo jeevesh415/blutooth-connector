@@ -300,13 +300,12 @@ public final class MultiDeviceManager implements AutoCloseable {
                             if (Protocol.PONG.equals(frame.type)) {
                                 long sent = frame.payload.optLong("t0", 0);
                                 if (sent == current.lastPingSentNs && sent != 0) {
-                                    long rttMs =
-                                            (System.nanoTime() - sent) / 1_000_000L;
+                                    long rttNanos = System.nanoTime() - sent;
+                                    long rttMs = rttNanos / 1_000_000L;
                                     if (rttMs >= 0 && rttMs < 300_000) {
                                         current.metrics.observe(rttMs);
                                         BluetoothL2capBulkTransport.observeRtt(
-                                                address,
-                                                System.nanoTime() - sent);
+                                                address, rttNanos);
                                     }
                                 }
                             }
