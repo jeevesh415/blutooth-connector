@@ -475,7 +475,7 @@ public final class DeviceSessionActivity extends Activity {
             } else {
                 BulkTransferAuthorization.revoke(this, session.address());
             }
-            if (service != null) service.refreshCapabilities();
+            if (service != null) service.refreshCapabilitiesAndRotateBulkToken();
             status.setText(allow
                     ? "File transfer authorized for this peer."
                     : "File transfer revoked for this peer.");
