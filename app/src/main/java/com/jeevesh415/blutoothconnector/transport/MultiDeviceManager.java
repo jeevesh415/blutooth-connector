@@ -62,7 +62,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
     public MultiDeviceManager(Context context, BluetoothAdapter adapter, Listener listener) {
         if (adapter == null) throw new IllegalArgumentException("Bluetooth adapter");
-        this.bluetoothCapabilities = BluetoothCapabilityProfile.fromAdapter(adapter);
+        this.bluetoothCapabilities = BluetoothCapabilityProfile.fromAdapter(context, adapter);
         if (listener != null) listeners.add(listener);
         this.bulkContext = context == null ? null : context.getApplicationContext();
 
