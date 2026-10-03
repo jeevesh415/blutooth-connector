@@ -41,19 +41,6 @@ public final class BluetoothCapabilityProfile {
         return new BluetoothCapabilityProfile(Build.VERSION.SDK_INT,classic,le,l2cap,twoM,coded,extended,periodic);
     }
 
-    @SuppressLint("MissingPermission")
-    public static BluetoothCapabilityProfile fromAdapter(BluetoothAdapter a) {
-        if (a==null) throw new IllegalArgumentException("Bluetooth adapter");
-        boolean classic = Build.VERSION.SDK_INT >= 5;
-        boolean le = Build.VERSION.SDK_INT >= 21 && a.getBluetoothLeScanner() != null;
-        boolean l2cap = Build.VERSION.SDK_INT >= 29 && le;
-        boolean twoM=Build.VERSION.SDK_INT>=26 && a.isLe2MPhySupported();
-        boolean coded=Build.VERSION.SDK_INT>=26 && a.isLeCodedPhySupported();
-        boolean extended=Build.VERSION.SDK_INT>=26 && a.isLeExtendedAdvertisingSupported();
-        boolean periodic=Build.VERSION.SDK_INT>=26 && a.isLePeriodicAdvertisingSupported();
-        return new BluetoothCapabilityProfile(Build.VERSION.SDK_INT,classic,le,l2cap,twoM,coded,extended,periodic);
-    }
-
     public static BluetoothCapabilityProfile forTesting(boolean classic, boolean le, boolean l2cap,
             boolean twoM, boolean coded, boolean extended, boolean periodic) {
         return new BluetoothCapabilityProfile(0,classic,le,l2cap,twoM,coded,extended,periodic);
