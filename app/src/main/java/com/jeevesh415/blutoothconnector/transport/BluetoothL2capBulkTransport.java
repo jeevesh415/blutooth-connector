@@ -209,8 +209,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                     destination.getParentFile(),
                     "." + destination.getName() + "." + transferId + ".part");
 
+            long currentPartialBytes = partialBytes(directory);
             if (directory.getUsableSpace() < fileSize
-                    || partialBytes(directory) + fileSize > MAX_PARTIAL_BYTES) {
+                    || currentPartialBytes > MAX_PARTIAL_BYTES - fileSize) {
                 throw new IOException("Insufficient Bluetooth bulk storage budget");
             }
 
@@ -337,6 +338,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                 OPTIMIZERS.computeIfAbsent(
                         deviceAddress == null ? "unknown" : deviceAddress,
                         ignored -> new BluetoothThroughputOptimizer());
+        java.util.concurrent.ScheduledFuture<?> watchdog = null;
         try (BluetoothSocket closeable = socket) {
             connectWithTimeout(closeable, CONNECT_TIMEOUT_MS);
             final long transferStartedNanos = System.nanoTime();
@@ -355,8 +357,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                     new BufferedOutputStream(
                             new ActivityOutputStream(closeable.getOutputStream(), lastActivity),
                             pipeBuffer));
-            java.util.concurrent.ScheduledFuture<?> watchdog =
-                    startWatchdog(closeable, lastActivity);
+            watchdog = startWatchdog(closeable, lastActivity);
 
             out.writeInt(MAGIC);
             out.writeInt(VERSION);
@@ -442,6 +443,8 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                         "Bluetooth bulk receiver rejected transfer: " + status);
             }
             return sourceSize;
+        } finally {
+            if (watchdog != null) watchdog.cancel(false);
         }
     }
 
