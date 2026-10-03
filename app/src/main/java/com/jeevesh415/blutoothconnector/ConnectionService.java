@@ -368,8 +368,20 @@ public final class ConnectionService extends Service {
     }
 
     public void refreshCapabilities() {
+        refreshCapabilities(false);
+    }
+
+    public void refreshCapabilitiesAndRotateBulkToken() {
+        refreshCapabilities(true);
+    }
+
+    private void refreshCapabilities(boolean rotateBulkToken) {
         MultiDeviceManager manager = peers;
         if (manager == null) return;
+
+        if (rotateBulkToken && bluetoothBulk != null) {
+            bluetoothBulk.rotateAuthorizationToken();
+        }
 
         for (DeviceSession session :
                 manager.sessions()) {
