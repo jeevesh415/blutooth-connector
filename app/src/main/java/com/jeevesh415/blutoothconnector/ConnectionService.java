@@ -34,6 +34,7 @@ import com.jeevesh415.blutoothconnector.transport.TcpBulkEndpoint;
 import com.jeevesh415.blutoothconnector.transport.BluetoothL2capBulkTransport;
 import com.jeevesh415.blutoothconnector.transport.WifiDirectPathManager;
 import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
+import com.jeevesh415.blutoothconnector.control.BulkTransferAuthorization;
 import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
 import com.jeevesh415.blutoothconnector.media.RtcPeerManager;
@@ -729,12 +730,18 @@ public final class ConnectionService extends Service {
                     new JSONArray()
                             .put("transport.ping")
                             .put("device.info")
-                            .put("device.state")
-                            .put("bulk.file-transfer");
+                            .put("device.state");
 
             boolean authorized =
                     RemoteControlAuthorization.isAuthorized(
                             this, session.address());
+            boolean bulkAuthorized =
+                    BulkTransferAuthorization.isAuthorized(
+                            this, session.address());
+
+            if (bulkAuthorized) {
+                capabilities.put("bulk.file-transfer");
+            }
 
             if (authorized) {
                 capabilities.put("app.control");
@@ -791,7 +798,9 @@ public final class ConnectionService extends Service {
             JSONArray endpoints =
                     new JSONArray();
 
-            if (bluetoothBulk != null && bluetoothBulk.available()) {
+            if (bulkAuthorized
+                    && bluetoothBulk != null
+                    && bluetoothBulk.available()) {
                 byte[] bluetoothToken = bluetoothBulk.authorizationToken();
                 if (bluetoothToken != null) {
                     endpoints.put(
