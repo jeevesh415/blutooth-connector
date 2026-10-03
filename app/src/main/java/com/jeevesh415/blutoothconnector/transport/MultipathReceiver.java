@@ -24,6 +24,8 @@ public final class MultipathReceiver {
     private static final int MAX_NAME = 512;
     private static final int MAX_CHUNKS = 1_000_000;
     private static final int MAX_CHUNK = 1024 * 1024;
+    private static final long MAX_TRANSFER_BYTES = 8L * 1024L * 1024L * 1024L;
+    private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int MAX_STORED_TRANSFERS = 64;
     private static final Map<String, State> STATES =
             new ConcurrentHashMap<>();
@@ -118,6 +120,7 @@ public final class MultipathReceiver {
         long expectedOffset =
                 (long) chunkIndex * MAX_CHUNK;
         if (fileSize <= 0
+                || fileSize > MAX_TRANSFER_BYTES
                 || expectedChunkCount > MAX_CHUNKS
                 || chunkCount != expectedChunkCount
                 || offset < 0
@@ -242,6 +245,13 @@ public final class MultipathReceiver {
                 directory.getCanonicalPath()
                         + "|" + transferId
                         + ":" + BulkTransferProtocol.hex(hash);
+        long currentPartialBytes = partialBytes(directory);
+        if (currentPartialBytes > MAX_PARTIAL_BYTES - fileSize) {
+            writeResponse(out, 7, 0);
+            throw new java.io.IOException(
+                    "Bulk partial storage budget exceeded");
+        }
+
         State state = getOrCreateState(
                 directory,
                 stateKey,
@@ -517,6 +527,19 @@ public final class MultipathReceiver {
         out.writeInt(status);
         out.writeLong(acknowledged);
         out.flush();
+    }
+
+    private static long partialBytes(File directory) {
+        File[] files = directory.listFiles((dir, name) ->
+                name != null && name.endsWith(".part"));
+        if (files == null) return 0L;
+        long total = 0L;
+        for (File file : files) {
+            long length = file.length();
+            if (Long.MAX_VALUE - total < length) return Long.MAX_VALUE;
+            total += length;
+        }
+        return total;
     }
 
     private static void cleanupStaleStates(File directory) {
