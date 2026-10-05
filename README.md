@@ -1,13 +1,13 @@
 # Blutooth Connector
 
-<a href="https://github.com/jeevesh415/blutooth-connector/releases/latest/download/blutooth-connector-debug.apk"><strong>⬇️ Download Android APK</strong></a>
+<a href="https://github.com/jeevesh415/blutooth-connector/releases/latest/download/blutooth-connector.apk"><strong>⬇️ Download Android APK</strong></a>
 
 A local-first Android inter-device control platform.
 
 ## Install on Android
 
 1. Tap **Download Android APK** above.
-2. Open the downloaded `blutooth-connector-debug.apk`.
+2. Open the downloaded `blutooth-connector.apk`.
 3. If Android asks, allow your browser/file manager to **install unknown apps**.
 4. Tap **Install**.
 
@@ -16,6 +16,19 @@ The repository builds the APK automatically in GitHub Actions. The complete buil
 **Supported Android:** Android 10 (API 29) and newer. Android 12+ enables additional capabilities where the platform provides them; Wi-Fi Aware and other newer transport capabilities remain runtime-gated rather than being required for installation.
 
 The download link always points to the repository's **latest** APK release. A new APK is published automatically whenever `main` changes and the build/tests succeed.
+
+## Release signing
+
+The published APK is a **release-signed** build, not a GitHub-runner-generated debug APK. The release workflow uses one persistent Android signing key stored in GitHub Actions secrets:
+
+- `ANDROID_KEYSTORE_B64` — base64-encoded PKCS12/JKS keystore
+- `ANDROID_KEYSTORE_PASSWORD` — keystore password
+- `ANDROID_KEY_ALIAS` — signing-key alias
+- `ANDROID_KEY_PASSWORD` — signing-key password
+
+The private keystore is never committed to the repository. The workflow reconstructs it only on the ephemeral runner, signs the release APK, verifies the published artifact byte-for-byte, and deletes the temporary keystore afterward. Keeping the same private key across releases is what allows Android to update an existing installation instead of treating the APK as a different signer.
+
+**Important for the first migration:** APKs previously installed from the old GitHub debug-release pipeline were signed by the old debug certificate. They cannot be updated by the new release signer. Uninstall that old installation once before installing the first persistently signed release. After that migration, subsequent releases retain the same signing identity and can update normally.
 
 ## Vision
 
