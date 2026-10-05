@@ -57,6 +57,8 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private static final int MAX_NAME_BYTES = 512;
     private static final int MAX_ID_BYTES = 64;
     private static final int MAX_CHUNKS = 1_000_000;
+    private static final long MAX_TRANSFER_BYTES = 8L * 1024L * 1024L * 1024L;
+    private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int CONNECT_TIMEOUT_MS = 8_000;
     private static final int IO_TIMEOUT_MS = 30_000;
     private static final int WATCHDOG_PERIOD_MS = 5_000;

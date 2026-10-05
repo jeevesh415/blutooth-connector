@@ -62,7 +62,8 @@ The repository now contains the bidirectional Bluetooth control plane, capabilit
 
 ## Build
 
-Open the project in Android Studio with JDK 17 and sync Gradle.
+Open the project in Android Studio with JDK 17 and sync Gradle. From a terminal,
+the reproducible command is `./gradlew testDebugUnitTest lintDebug assembleDebug`.
 
 Toolchain baseline: Android Gradle Plugin 9.4.1, Gradle 9.7.1, compileSdk 36, targetSdk 36, minSdk 29 (Android 10).
 
