@@ -23,6 +23,37 @@ android {
         unitTests.isReturnDefaultValues = true
     }
 
+    val releaseKeystorePath = System.getenv("ANDROID_KEYSTORE_PATH")
+    val releaseKeystorePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+    val releaseKeyAlias = System.getenv("ANDROID_KEY_ALIAS")
+    val releaseKeyPassword = System.getenv("ANDROID_KEY_PASSWORD")
+
+    signingConfigs {
+        if (releaseKeystorePath != null &&
+            releaseKeystorePassword != null &&
+            releaseKeyAlias != null &&
+            releaseKeyPassword != null) {
+            create("release") {
+                storeFile = file(releaseKeystorePath)
+                storePassword = releaseKeystorePassword
+                keyAlias = releaseKeyAlias
+                keyPassword = releaseKeyPassword
+            }
+        }
+    }
+
+    buildTypes {
+        release {
+            isMinifyEnabled = false
+            if (releaseKeystorePath != null &&
+                releaseKeystorePassword != null &&
+                releaseKeyAlias != null &&
+                releaseKeyPassword != null) {
+                signingConfig = signingConfigs.getByName("release")
+            }
+        }
+    }
+
     // Android 10 (API 29) is the minimum supported OS.
     // API 36 is used as the stable compilation/target baseline; Android 17 remains
     // runtime-compatible without requiring the Android 17 preview SDK package.
