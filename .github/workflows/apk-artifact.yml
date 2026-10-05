@@ -44,40 +44,63 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon testDebugUnitTest
 
-      - name: Build installable debug APK
-        run: gradle --no-daemon assembleDebug
+      - name: Verify release signing configuration
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          test -n "$ANDROID_KEYSTORE_B64"
+          test -n "$ANDROID_KEYSTORE_PASSWORD"
+          test -n "$ANDROID_KEY_ALIAS"
+          test -n "$ANDROID_KEY_PASSWORD"
+          printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
+          test -s "$RUNNER_TEMP/release.keystore"
+
+      - name: Build signed release APK
+        env:
+          ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
+          ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: gradle --no-daemon assembleRelease
 
       - name: Prepare release APK
         run: |
-          cp app/build/outputs/apk/debug/app-debug.apk blutooth-connector-debug.apk
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector-debug.apk | grep -q "sdkVersion:'29'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector-debug.apk | grep -q "targetSdkVersion:'36'"
-          sha256sum blutooth-connector-debug.apk | tee blutooth-connector-debug.apk.sha256
+          cp app/build/outputs/apk/release/app-release.apk blutooth-connector.apk
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk | grep -q "sdkVersion:'29'"
+          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk | grep -q "targetSdkVersion:'36'"
+          sha256sum blutooth-connector.apk | tee blutooth-connector.apk.sha256
 
       - name: Publish latest APK release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           if gh release view latest >/dev/null 2>&1; then
-            gh release upload latest blutooth-connector-debug.apk blutooth-connector-debug.apk.sha256 --clobber
+            gh release upload latest blutooth-connector.apk blutooth-connector.apk.sha256 --clobber
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" -f sha="${GITHUB_SHA}" -F force=true
             RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/latest" --jq '.id')"
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f target_commitish="${GITHUB_SHA}"
           else
-            gh release create latest blutooth-connector-debug.apk blutooth-connector-debug.apk.sha256               --target "${GITHUB_SHA}"               --title "Latest Android APK"               --notes "Automatically built from main. Android 10+ APK. SHA-256 is provided as a companion asset."
+            gh release create latest blutooth-connector.apk blutooth-connector.apk.sha256 --target "${GITHUB_SHA}" --title "Latest Android APK" --notes "Automatically built from main. Signed release APK for Android 10+. SHA-256 is provided as a companion asset."
           fi
 
           rm -rf /tmp/apk-verify
           mkdir -p /tmp/apk-verify
-          gh release download latest --pattern "blutooth-connector-debug.apk" --dir /tmp/apk-verify
-          test -s /tmp/apk-verify/blutooth-connector-debug.apk
-          cmp blutooth-connector-debug.apk /tmp/apk-verify/blutooth-connector-debug.apk
+          gh release download latest --pattern "blutooth-connector.apk" --dir /tmp/apk-verify
+          test -s /tmp/apk-verify/blutooth-connector.apk
+          cmp blutooth-connector.apk /tmp/apk-verify/blutooth-connector.apk
 
       - name: Upload CI artifact
         uses: actions/upload-artifact@v4
         with:
           name: blutooth-connector-apk
           path: |
-            blutooth-connector-debug.apk
-            blutooth-connector-debug.apk.sha256
+            blutooth-connector.apk
+            blutooth-connector.apk.sha256
           retention-days: 30
+
+      - name: Remove signing material
+        if: always()
+        run: rm -f "$RUNNER_TEMP/release.keystore"
