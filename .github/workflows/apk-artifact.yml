@@ -93,7 +93,7 @@ jobs:
           cmp blutooth-connector.apk /tmp/apk-verify/blutooth-connector.apk
 
       - name: Upload CI artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v6
         with:
           name: blutooth-connector-apk
           path: |
