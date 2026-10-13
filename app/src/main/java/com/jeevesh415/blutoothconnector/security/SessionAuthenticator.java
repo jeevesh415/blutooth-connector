@@ -185,6 +185,25 @@ public final class SessionAuthenticator {
         }
     }
 
+    /**
+     * Removes one locally stored trust-on-first-use pin. This is intended for an
+     * explicit user recovery action after a peer app identity was deliberately
+     * reset; callers should warn that the next key will be trusted on first use.
+     */
+    public static synchronized void forgetPeer(
+            Context context, String peerAddress) {
+        if (context == null || !validAddress(peerAddress)) {
+            throw new IllegalArgumentException("Invalid peer address");
+        }
+        boolean saved = prefs(context).edit()
+                .remove(KEY_PREFIX + fingerprint(peerAddress))
+                .commit();
+        if (!saved) {
+            throw new IllegalStateException(
+                    "Unable to remove peer identity pin");
+        }
+    }
+
     static void requireConsistentPin(
             byte[] pinnedPublicKey,
             byte[] candidatePublicKey) {
