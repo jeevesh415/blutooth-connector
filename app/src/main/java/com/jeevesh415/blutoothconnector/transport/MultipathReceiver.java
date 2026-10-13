@@ -29,7 +29,7 @@ public final class MultipathReceiver {
     private static final long MAX_TRANSFER_BYTES = 8L * 1024L * 1024L * 1024L;
     private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int MAX_STORED_TRANSFERS = 64;
-    private static final Object STATE_LOCK = new Object();
+    private static final Object STATE_LOCK = BulkPartialStorageLock.INSTANCE;
     private static final Map<String, State> STATES =
             new ConcurrentHashMap<>();
 
@@ -422,7 +422,7 @@ public final class MultipathReceiver {
         }
     }
 
-    private static long reservedPartialBytes(
+    static long reservedPartialBytes(
             File directory,
             File excludedPart) throws java.io.IOException {
         String root = directory.getCanonicalPath();
