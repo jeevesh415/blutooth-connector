@@ -353,10 +353,10 @@ public final class MultipathFileTransfer {
                 return null;
             }
 
-            if (!host.matches("[0-9]{1,3}(\\\\.[0-9]{1,3}){3}")) {
+            if (!host.matches("[0-9]{1,3}(\\.[0-9]{1,3}){3}")) {
                 return null; // no hostnames, shorthand IPv4, or numeric tricks
             }
-            String[] octets = host.split("\\\\.");
+            String[] octets = host.split("\\.");
             byte[] raw = new byte[4];
             for (int i = 0; i < octets.length; i++) {
                 int value = Integer.parseInt(octets[i]);
