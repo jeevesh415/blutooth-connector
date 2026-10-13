@@ -32,6 +32,8 @@ public final class MultipathFileTransfer {
     private static final int MAX_ID = 64;
     private static final int CHUNK = 1024 * 1024;
     private static final int MAX_CHUNKS = 1_000_000;
+    private static final int MAX_ENDPOINTS = 32;
+    private static final int MAX_WORKERS = 8;
     private static final long MAX_TRANSFER_BYTES = 8L * 1024L * 1024L * 1024L;
 
     private static final class Candidate {
@@ -107,6 +109,10 @@ public final class MultipathFileTransfer {
         }
         if (endpoints == null || endpoints.isEmpty()) {
             throw new IllegalArgumentException("No paths");
+        }
+        if (endpoints.size() > MAX_ENDPOINTS) {
+            throw new IllegalArgumentException(
+                    "Too many bulk endpoints: maximum is " + MAX_ENDPOINTS);
         }
         if (maxAttempts < 1) {
             throw new IllegalArgumentException("maxAttempts");
@@ -206,9 +212,13 @@ public final class MultipathFileTransfer {
                     .observe(1_000_000, 10);
         }
 
+        // Endpoint/network combinations are untrusted input. Keep per-transfer
+        // concurrency bounded even when many routes are available.
         int workers = Math.min(
-                Math.max(1, candidates.size() * 2),
-                Math.max(1, chunkCount));
+                MAX_WORKERS,
+                Math.min(
+                        Math.max(1, candidates.size() * 2),
+                        Math.max(1, chunkCount)));
 
         ExecutorService pool =
                 Executors.newFixedThreadPool(workers);
