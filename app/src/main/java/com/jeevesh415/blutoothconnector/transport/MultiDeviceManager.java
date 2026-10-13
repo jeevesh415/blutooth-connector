@@ -26,6 +26,7 @@ import java.util.concurrent.TimeUnit;
 
 public final class MultiDeviceManager implements AutoCloseable {
     public static final int MAX_CLASSIC_PEERS = 7;
+    private static final int MAX_BULK_ENDPOINTS_PER_PEER = 32;
     private static final long HEARTBEAT_MS = 5000;
     private static final long DEAD_AFTER_MS = 15000;
 
@@ -279,13 +280,26 @@ public final class MultiDeviceManager implements AutoCloseable {
                                 org.json.JSONArray endpoints =
                                         frame.payload.optJSONArray("bulkEndpoints");
                                 if (endpoints != null) {
-                                    for (int i = 0; i < endpoints.length(); i++) {
+                                    int accepted = 0;
+                                    for (int i = 0;
+                                            i < endpoints.length()
+                                                    && accepted < MAX_BULK_ENDPOINTS_PER_PEER;
+                                            i++) {
                                         org.json.JSONObject item =
                                                 endpoints.optJSONObject(i);
                                         if (item == null) continue;
                                         try {
-                                            current.bulkEndpoints.add(
-                                                    BulkEndpointInfo.fromJson(item));
+                                            BulkEndpointInfo endpoint =
+                                                    BulkEndpointInfo.fromJson(item);
+                                            if (endpoint.host == null
+                                                    || endpoint.host.isEmpty()
+                                                    || endpoint.port < 1
+                                                    || endpoint.tokenBase64 == null
+                                                    || endpoint.tokenBase64.isEmpty()) {
+                                                continue;
+                                            }
+                                            current.bulkEndpoints.add(endpoint);
+                                            accepted++;
                                         } catch (Exception ignored) {
                                             // Ignore one malformed endpoint.
                                         }
