@@ -46,6 +46,7 @@ public final class MultipathReceiver {
         final BitSet complete;
         // Guarded by STATE_LOCK. Active chunk handlers may never be evicted.
         int activeChunks;
+        volatile boolean completed;
         volatile long lastTouchedMs;
 
         State(File part, File finalFile, String originalName,
@@ -285,6 +286,12 @@ public final class MultipathReceiver {
                 state.lastTouchedMs =
                         System.currentTimeMillis();
 
+                // A retry may already be queued when another path delivers the
+                // final missing chunk. A completed state acknowledges that retry
+                // rather than hashing or promoting the now-moved .part file again.
+                if (state.completed) {
+                    completedFile = state.finalFile;
+                } else {
                 if (!state.complete.get(chunkIndex)) {
                     try (RandomAccessFile raf =
                                  new RandomAccessFile(
@@ -326,18 +333,17 @@ public final class MultipathReceiver {
                     }
 
                     promotePartial(state.part, state.finalFile);
-                    synchronized (STATE_LOCK) {
-                        STATES.remove(stateKey, state);
-                    }
+                    state.completed = true;
                     deleteMetadata(state);
                     completedFile = state.finalFile;
+                }
                 }
             }
 
             writeResponse(out, 0, length);
             return completedFile;
         } finally {
-            releaseState(state);
+            releaseState(stateKey, state);
         }
     }
 
@@ -403,13 +409,16 @@ public final class MultipathReceiver {
         }
     }
 
-    private static void releaseState(State state) {
+    private static void releaseState(String stateKey, State state) {
         synchronized (STATE_LOCK) {
             if (state.activeChunks > 0) {
                 state.activeChunks--;
             }
             state.lastTouchedMs =
                     System.currentTimeMillis();
+            if (state.completed && state.activeChunks == 0) {
+                STATES.remove(stateKey, state);
+            }
         }
     }
 
