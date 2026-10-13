@@ -11,3 +11,11 @@ local.properties
 
 # OS
 .DS_Store
+
+# Android signing credentials — never commit private keys or passwords
+*.jks
+*.keystore
+*.p12
+*.pfx
+keystore.properties
+signing.properties
