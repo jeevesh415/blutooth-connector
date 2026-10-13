@@ -232,6 +232,28 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
     }
 
+    /**
+     * Restarts the RFCOMM session for a peer after an explicit local identity-pin
+     * reset. The normal retry/backoff path is retained.
+     */
+    public void reconnect(String address) {
+        if (closed || address == null || address.isEmpty()) return;
+        DeviceSession current = sessions.get(address);
+        if (current != null) {
+            closeSession(
+                    current,
+                    new java.io.IOException(
+                            "Peer identity pin was reset; reconnecting"));
+            return;
+        }
+
+        BluetoothDevice device = knownDevices.get(address);
+        if (device != null
+                && connecting.putIfAbsent(address, Boolean.TRUE) == null) {
+            transport.connect(device);
+        }
+    }
+
     public void send(String address, Frame frame) throws Exception {
         DeviceSession session = sessions.get(address);
         if (session == null) {
