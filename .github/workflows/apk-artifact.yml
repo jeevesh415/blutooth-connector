@@ -2,7 +2,8 @@ name: Android APK Release
 
 concurrency:
   group: android-apk-release
-  cancel-in-progress: true
+  # Never interrupt an asset upload/tag move halfway through publication.
+  cancel-in-progress: false
 
 on:
   push:
