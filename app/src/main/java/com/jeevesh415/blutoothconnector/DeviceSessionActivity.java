@@ -27,6 +27,7 @@ import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
 import com.jeevesh415.blutoothconnector.protocol.Frame;
 import com.jeevesh415.blutoothconnector.protocol.Protocol;
 import com.jeevesh415.blutoothconnector.protocol.ReliableCommandClient;
+import com.jeevesh415.blutoothconnector.security.SessionAuthenticator;
 import com.jeevesh415.blutoothconnector.transport.DeviceSession;
 import com.jeevesh415.blutoothconnector.transport.MultiDeviceManager;
 import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
@@ -145,6 +146,8 @@ public final class DeviceSessionActivity extends Activity {
                 v -> authorizeBulk(true));
         addButton(root, "×  Revoke file transfer", panel2, textPrimary,
                 v -> authorizeBulk(false));
+        addButton(root, "↻  Forget peer identity pin and reconnect", red, textPrimary,
+                v -> forgetPeerIdentityPin());
         addButton(root, "⚙  Open Accessibility settings", panel2, textPrimary,
                 v -> openAccessibility());
 
@@ -497,6 +500,41 @@ public final class DeviceSessionActivity extends Activity {
         } catch (Exception e) {
             status.setText("Authorization change failed.");
         }
+    }
+
+    private void forgetPeerIdentityPin() {
+        DeviceSession session = selectedSession();
+        if (session == null || peers == null) {
+            status.setText("Select a connected peer first.");
+            return;
+        }
+
+        final String address = session.address();
+        new android.app.AlertDialog.Builder(this)
+                .setTitle("Forget trusted peer identity?")
+                .setMessage(
+                        "This removes only this phone's stored application-key pin "
+                                + "for " + address + " and reconnects. Use it only "
+                                + "after deliberately reinstalling the selected peer's "
+                                + "app or verifying an identity reset. The next session "
+                                + "will trust the key the peer presents. Do not use this "
+                                + "to dismiss an unexpected identity-change warning.")
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Forget and reconnect", (dialog, which) -> {
+                    try {
+                        SessionAuthenticator.forgetPeer(
+                                getApplicationContext(), address);
+                        peers.reconnect(address);
+                        status.setText(
+                                "Peer pin cleared. Reconnect scheduled; verify the "
+                                        + "selected device before using remote-control features.");
+                    } catch (Exception error) {
+                        status.setText(
+                                "Could not reset peer identity pin: "
+                                        + error.getMessage());
+                    }
+                })
+                .show();
     }
 
     private void openAccessibility() {
