@@ -15,8 +15,10 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Enumeration;
 import java.util.List;
-import java.util.concurrent.ExecutorService;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public final class TcpBulkEndpoint implements AutoCloseable {
     public interface Listener {
@@ -49,13 +51,24 @@ public final class TcpBulkEndpoint implements AutoCloseable {
     }
 
     private static final int MAX_PARALLEL_CONNECTIONS = 8;
+    private static final int MAX_QUEUED_CONNECTIONS = 8;
     private static final int SOCKET_READ_TIMEOUT_MS = 15_000;
 
-    private final ExecutorService acceptExecutor =
-            Executors.newSingleThreadExecutor();
-    private final ExecutorService transferExecutor =
-            Executors.newFixedThreadPool(
-                    MAX_PARALLEL_CONNECTIONS);
+    private final ThreadPoolExecutor acceptExecutor =
+            new ThreadPoolExecutor(
+                    1, 1, 0L, TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(1),
+                    namedThreadFactory("tcp-bulk-accept"),
+                    new ThreadPoolExecutor.AbortPolicy());
+    private final ThreadPoolExecutor transferExecutor =
+            new ThreadPoolExecutor(
+                    MAX_PARALLEL_CONNECTIONS,
+                    MAX_PARALLEL_CONNECTIONS,
+                    0L,
+                    TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(MAX_QUEUED_CONNECTIONS),
+                    namedThreadFactory("tcp-bulk-receiver"),
+                    new ThreadPoolExecutor.AbortPolicy());
     private final SecureRandom random = new SecureRandom();
 
     private ServerSocket server;
@@ -83,22 +96,52 @@ public final class TcpBulkEndpoint implements AutoCloseable {
         server.bind(
                 new java.net.InetSocketAddress(0));
 
-        acceptExecutor.execute(() -> {
-            while (server != null && !server.isClosed()) {
-                try {
-                    Socket socket = server.accept();
-                    socket.setTcpNoDelay(true);
-                    transferExecutor.execute(
-                            () -> handle(socket));
-                } catch (Exception error) {
-                    if (server != null
-                            && !server.isClosed()
-                            && listener != null) {
-                        listener.onError(error);
+        try {
+            acceptExecutor.execute(() -> {
+                while (server != null && !server.isClosed()) {
+                    Socket socket = null;
+                    try {
+                        socket = server.accept();
+                        socket.setTcpNoDelay(true);
+                        Socket accepted = socket;
+                        transferExecutor.execute(
+                                () -> handle(accepted));
+                        socket = null; // ownership transferred to the handler
+                    } catch (RejectedExecutionException saturated) {
+                        closeQuietly(socket);
+                        // A full bounded queue is back-pressure, not a server failure.
+                    } catch (Exception error) {
+                        closeQuietly(socket);
+                        if (server != null
+                                && !server.isClosed()
+                                && listener != null) {
+                            listener.onError(error);
+                        }
                     }
                 }
-            }
-        });
+            });
+        } catch (RejectedExecutionException stopped) {
+            close();
+            throw new IllegalStateException(
+                    "Bulk endpoint executor is no longer available", stopped);
+        }
+    }
+
+    private static java.util.concurrent.ThreadFactory namedThreadFactory(
+            String baseName) {
+        java.util.concurrent.atomic.AtomicInteger sequence =
+                new java.util.concurrent.atomic.AtomicInteger();
+        return task -> {
+            Thread thread = new Thread(
+                    task, baseName + "-" + sequence.incrementAndGet());
+            thread.setDaemon(true);
+            return thread;
+        };
+    }
+
+    private static void closeQuietly(Socket socket) {
+        if (socket == null) return;
+        try { socket.close(); } catch (Exception ignored) {}
     }
 
     private void handle(Socket socket) {
