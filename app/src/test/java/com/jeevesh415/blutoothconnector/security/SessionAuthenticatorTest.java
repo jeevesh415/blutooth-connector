@@ -43,6 +43,18 @@ public final class SessionAuthenticatorTest {
                 SessionAuthenticator.publicKeyFingerprint(key.clone()));
     }
 
+    @Test public void acceptsOnlyTheAlreadyPinnedIdentity() {
+        byte[] pinned = bytes(65, (byte) 0x11);
+        SessionAuthenticator.requireConsistentPin(pinned, pinned.clone());
+    }
+
+    @Test(expected = SecurityException.class)
+    public void rejectsConcurrentAttemptToReplacePinnedIdentity() {
+        byte[] pinned = bytes(65, (byte) 0x11);
+        byte[] replacement = bytes(65, (byte) 0x22);
+        SessionAuthenticator.requireConsistentPin(pinned, replacement);
+    }
+
     private static byte[] bytes(int count, byte value) {
         byte[] out = new byte[count];
         Arrays.fill(out, value);
