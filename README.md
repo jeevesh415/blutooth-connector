@@ -1,21 +1,21 @@
 # Blutooth Connector
 
-<a href="https://github.com/jeevesh415/blutooth-connector/releases/latest/download/blutooth-connector.apk"><strong>⬇️ Download Android APK</strong></a>
+<a href="https://github.com/jeevesh415/blutooth-connector/releases/latest"><strong>⬇️ Download Android APK</strong></a>
 
 A local-first Android inter-device control platform.
 
 ## Install on Android
 
 1. Tap **Download Android APK** above.
-2. Open the downloaded `blutooth-connector.apk`.
-3. If Android asks, allow your browser/file manager to **install unknown apps**.
-4. Tap **Install**.
+2. Under the latest release's **Assets**, choose `blutooth-connector.apk` (the persistently signed release build).
+3. Open it and, if Android asks, allow your browser/file manager to **install unknown apps**.
+4. Tap **Install**. If `blutooth-connector.apk` is not listed, release-signing secrets have not been configured yet; do not mistake the old debug APK for the update-safe release.
 
 The repository builds the APK automatically in GitHub Actions. The complete build environment (JDK 17, stable Android SDK 36, Android Gradle Plugin 9.4.1, Gradle 9.7.1, dependencies, tests, and APK packaging) runs on GitHub's build machine, so an end user does **not** need Android Studio, Gradle, Java, or an Android compiler installed on the phone.
 
 **Supported Android:** Android 10 (API 29) and newer. Android 12+ enables additional capabilities where the platform provides them; Wi-Fi Aware and other newer transport capabilities remain runtime-gated rather than being required for installation.
 
-The download link always points to the repository's **latest** APK release. A new APK is published automatically whenever `main` changes and the build/tests succeed.
+The download link opens the repository's **latest release**. The release workflow publishes a new signed APK only after tests pass, all four signing secrets are present, and the certificate matches the previously published signed APK. If signing secrets are missing, it deliberately skips publication and leaves the existing release unchanged.
 
 ## Release signing
 
