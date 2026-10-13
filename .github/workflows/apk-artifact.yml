@@ -44,46 +44,99 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon testDebugUnitTest
 
-      - name: Verify release signing configuration
+      - name: Check release signing secrets
+        id: signing
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          test -n "$ANDROID_KEYSTORE_B64"
-          test -n "$ANDROID_KEYSTORE_PASSWORD"
-          test -n "$ANDROID_KEY_ALIAS"
-          test -n "$ANDROID_KEY_PASSWORD"
+          if [[ -n "$ANDROID_KEYSTORE_B64" \
+             && -n "$ANDROID_KEYSTORE_PASSWORD" \
+             && -n "$ANDROID_KEY_ALIAS" \
+             && -n "$ANDROID_KEY_PASSWORD" ]]; then
+            echo "available=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "available=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release APK publication skipped. Configure ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD in repository Actions secrets."
+          fi
+
+      - name: Decode release signing key
+        if: steps.signing.outputs.available == 'true'
+        env:
+          ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
+        run: |
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
           test -s "$RUNNER_TEMP/release.keystore"
 
       - name: Build signed release APK
+        if: steps.signing.outputs.available == 'true'
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
-        run: gradle --no-daemon assembleRelease
+        run: |
+          ANDROID_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) \
+          ANDROID_VERSION_NAME="0.8.0+${GITHUB_RUN_NUMBER}" \
+          gradle --no-daemon assembleRelease
 
       - name: Prepare release APK
+        if: steps.signing.outputs.available == 'true'
         run: |
+          set -euo pipefail
           cp app/build/outputs/apk/release/app-release.apk blutooth-connector.apk
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk | grep -q "sdkVersion:'29'"
-          "$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk | grep -q "targetSdkVersion:'36'"
+          BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk)"
+          printf '%s\n' "$BADGING" | grep -q "package: name='com.jeevesh415.blutoothconnector'"
+          printf '%s\n' "$BADGING" | grep -q "sdkVersion:'29'"
+          printf '%s\n' "$BADGING" | grep -q "targetSdkVersion:'36'"
+          EXPECTED_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER))
+          printf '%s\n' "$BADGING" | grep -q "versionCode='${EXPECTED_VERSION_CODE}'"
           sha256sum blutooth-connector.apk | tee blutooth-connector.apk.sha256
 
-      - name: Publish latest APK release
+      - name: Verify signing certificate continuity
+        if: steps.signing.outputs.available == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          APK_SIGNER="$ANDROID_HOME/build-tools/36.0.0/apksigner"
+          NEW_CERT="$("$APK_SIGNER" verify --print-certs blutooth-connector.apk \
+            | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ { print tolower($2); exit }')"
+          test -n "$NEW_CERT"
+
+          if gh release view latest >/dev/null 2>&1; then
+            rm -rf /tmp/previous-signed-release
+            mkdir -p /tmp/previous-signed-release
+            if gh release download latest --pattern "blutooth-connector.apk" \
+                 --dir /tmp/previous-signed-release >/dev/null 2>&1; then
+              OLD_APK="/tmp/previous-signed-release/blutooth-connector.apk"
+              OLD_CERT="$("$APK_SIGNER" verify --print-certs "$OLD_APK" \
+                | awk -F': ' '/Signer #1 certificate SHA-256 digest:/ { print tolower($2); exit }')"
+              if [[ -z "$OLD_CERT" || "$OLD_CERT" != "$NEW_CERT" ]]; then
+                echo "::error::Release signing certificate changed. Refusing to replace the published APK because installed users would lose in-place updates."
+                exit 1
+              fi
+            fi
+          fi
+
+      - name: Publish latest APK release
+        if: steps.signing.outputs.available == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
           if gh release view latest >/dev/null 2>&1; then
             gh release upload latest blutooth-connector.apk blutooth-connector.apk.sha256 --clobber
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" -f sha="${GITHUB_SHA}" -F force=true
             RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/latest" --jq '.id')"
             gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f target_commitish="${GITHUB_SHA}"
           else
-            gh release create latest blutooth-connector.apk blutooth-connector.apk.sha256 --target "${GITHUB_SHA}" --title "Latest Android APK" --notes "Automatically built from main. Signed release APK for Android 10+. SHA-256 is provided as a companion asset."
+            gh release create latest blutooth-connector.apk blutooth-connector.apk.sha256 \
+              --target "${GITHUB_SHA}" \
+              --title "Latest Android APK" \
+              --notes "Automatically built from main. Persistently signed release APK for Android 10+. SHA-256 is provided as a companion asset."
           fi
 
           rm -rf /tmp/apk-verify
@@ -93,6 +146,7 @@ jobs:
           cmp blutooth-connector.apk /tmp/apk-verify/blutooth-connector.apk
 
       - name: Upload CI artifact
+        if: steps.signing.outputs.available == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: blutooth-connector-apk
