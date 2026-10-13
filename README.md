@@ -28,7 +28,9 @@ The published APK is a **release-signed** build, not a GitHub-runner-generated d
 
 The private keystore is never committed to the repository. The workflow reconstructs it only on the ephemeral runner, signs the release APK, verifies the published artifact byte-for-byte, and deletes the temporary keystore afterward. Keeping the same private key across releases is what allows Android to update an existing installation instead of treating the APK as a different signer.
 
-**Important for the first migration:** APKs previously installed from the old GitHub debug-release pipeline were signed by the old debug certificate. They cannot be updated by the new release signer. Uninstall that old installation once before installing the first persistently signed release. After that migration, subsequent releases retain the same signing identity and can update normally.
+**Important for the first migration:** APKs previously installed from the old GitHub debug-release pipeline were signed by a runner-generated debug certificate. They cannot be updated by the new release signer. Uninstall that old installation once before installing the first persistently signed release. This removes that app install's local settings, Android Keystore identity, and stored peer pins; save any app-private files before uninstalling.
+
+Because peers use trust-on-first-use application-key pins, the other phone may reject the reinstalled phone's new identity until that specific pin is reset. On the *other phone*, open **Device Control Center**, select the reinstalled peer, and choose **Forget peer identity pin and reconnect**. Confirm this only when you have deliberately reinstalled that device or otherwise verified the identity reset. The next successful connection will pin the new key. Repeat for each peer that still stores the old key. After migration, do not replace or lose the release keystore; subsequent APKs signed with the same key can update normally.
 
 ## Vision
 
