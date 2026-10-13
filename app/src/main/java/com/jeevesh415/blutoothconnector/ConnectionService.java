@@ -514,14 +514,18 @@ public final class ConnectionService extends Service {
         if (session.remoteIdentityKey != null
                 || session.remoteAuthNonce != null
                 || session.localAuthSent) {
-            if (!java.security.MessageDigest.isEqual(
-                        session.remoteIdentityKey, remoteKey)
+            if (session.remoteIdentityKey == null
+                    || session.remoteAuthNonce == null
                     || !java.security.MessageDigest.isEqual(
-                        session.remoteAuthNonce, remoteNonce)) {
+                            session.remoteIdentityKey, remoteKey)
+                    || !java.security.MessageDigest.isEqual(
+                            session.remoteAuthNonce, remoteNonce)) {
                 throw new SecurityException(
                         "Peer attempted to renegotiate an authenticated identity");
             }
-            if (session.authenticated) {
+            // HELLO is a one-time handshake message. Do not emit another AUTH
+            // signature for duplicate HELLO packets while the handshake is live.
+            if (session.authenticated || session.localAuthSent) {
                 return;
             }
         }
@@ -581,6 +585,10 @@ public final class ConnectionService extends Service {
     private void handleAuth(
             DeviceSession session,
             Frame frame) throws Exception {
+        // The signature was already verified for this transcript. Replayed AUTH
+        // frames must not repeat expensive verification or send more AUTH_OKs.
+        if (session.remoteAuthVerified) return;
+
         if (session.remoteIdentityKey == null
                 || session.remoteAuthNonce == null) {
             throw new SecurityException("AUTH before HELLO");
@@ -645,6 +653,7 @@ public final class ConnectionService extends Service {
             // Receiving AUTH_OK before validating AUTH is not sufficient.
             throw new SecurityException("AUTH_OK before authenticated peer");
         }
+        if (session.authOkReceived) return;
         session.authOkReceived = true;
         maybeAuthenticate(session);
     }
