@@ -222,6 +222,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             // pass the same aggregate-storage check. L2CAP transfers are not resumed;
             // a duplicate transfer id must not share/delete another handler's file.
             synchronized (PARTIAL_STORAGE_LOCK) {
+                cleanupStalePartialFiles(directory);
                 if (candidatePartial.exists()) {
                     throw new IOException("Bluetooth transfer id is already active");
                 }
@@ -596,6 +597,24 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             int length = Math.min(data.length - offset, writeSize);
             out.write(data, offset, length);
             offset += length;
+        }
+    }
+
+    private static void cleanupStalePartialFiles(File directory) {
+        long cutoff =
+                System.currentTimeMillis() - 10 * 60 * 1000L;
+        File[] files = directory.listFiles(
+                (dir, name) -> name != null
+                        && name.startsWith(".")
+                        && name.endsWith(".part"));
+        if (files == null) return;
+
+        for (File partial : files) {
+            // L2CAP temporary files are hidden. MultipathReceiver uses ordinary
+            // hash-named partials and owns their separate metadata/lifecycle.
+            if (partial.lastModified() < cutoff) {
+                try { partial.delete(); } catch (Exception ignored) {}
+            }
         }
     }
 
