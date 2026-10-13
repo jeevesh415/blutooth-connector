@@ -48,3 +48,9 @@ jobs:
 
       - name: Debug build
         run: gradle --no-daemon assembleDebug
+
+      # Validate the release variant's source/manifest/resource pipeline without
+      # requiring or exposing the private signing key. Publication uses the
+      # separately configured, persistent signing key in apk-artifact.yml.
+      - name: Release variant build validation
+        run: gradle --no-daemon assembleRelease
