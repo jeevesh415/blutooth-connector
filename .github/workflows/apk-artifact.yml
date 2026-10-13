@@ -108,7 +108,7 @@ jobs:
 
           if gh release view latest >/dev/null 2>&1; then
             ASSET_NAMES="$(gh release view latest --json assets --jq '.assets[].name')"
-            if printf '%s\\n' "$ASSET_NAMES" | grep -Fxq "blutooth-connector.apk"; then
+            if printf '%s\n' "$ASSET_NAMES" | grep -Fxq "blutooth-connector.apk"; then
               rm -rf /tmp/previous-signed-release
               mkdir -p /tmp/previous-signed-release
               gh release download latest --pattern "blutooth-connector.apk" \
