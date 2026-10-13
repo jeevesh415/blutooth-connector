@@ -45,11 +45,15 @@ import org.json.JSONObject;
 import java.io.File;
 import java.nio.charset.StandardCharsets;
 import java.util.Arrays;
-import java.util.concurrent.Executors;
+import java.util.concurrent.ArrayBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 
 public final class ConnectionService extends Service {
     private static final String CHANNEL = "connection";
     private static final int NOTIFICATION_ID = 7;
+    private static final int COMMAND_WORKERS = 4;
+    private static final int MAX_PENDING_COMMANDS = 64;
 
     private final IBinder binder =
             new LocalBinder();
@@ -67,9 +71,20 @@ public final class ConnectionService extends Service {
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
 
-    private final java.util.concurrent.ExecutorService
-            commandExecutor =
-            Executors.newFixedThreadPool(4);
+    private final ThreadPoolExecutor commandExecutor =
+            new ThreadPoolExecutor(
+                    COMMAND_WORKERS,
+                    COMMAND_WORKERS,
+                    0L,
+                    TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(MAX_PENDING_COMMANDS),
+                    task -> {
+                        Thread thread = new Thread(
+                                task, "connection-command");
+                        thread.setDaemon(true);
+                        return thread;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
 
     public final class LocalBinder extends Binder {
         public ConnectionService service() {
