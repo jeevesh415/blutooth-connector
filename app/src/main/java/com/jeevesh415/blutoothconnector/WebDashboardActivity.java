@@ -7,8 +7,10 @@ import android.content.pm.PackageManager;
 import android.content.ComponentName;
 import android.content.Intent;
 import android.content.ServiceConnection;
+import android.net.Uri;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.webkit.WebResourceRequest;
 import android.webkit.WebSettings;
 import android.webkit.WebView;
 import android.webkit.WebViewClient;
@@ -50,7 +52,23 @@ public final class WebDashboardActivity extends Activity {
         settings.setDomStorageEnabled(true);
         settings.setAllowFileAccess(false);
         settings.setAllowContentAccess(false);
-        webView.setWebViewClient(new WebViewClient());
+        settings.setAllowFileAccessFromFileURLs(false);
+        settings.setAllowUniversalAccessFromFileURLs(false);
+        settings.setJavaScriptCanOpenWindowsAutomatically(false);
+        settings.setSupportMultipleWindows(false);
+        webView.setWebViewClient(new WebViewClient() {
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, WebResourceRequest request) {
+                return !isTrustedDashboardAsset(request.getUrl());
+            }
+
+            @Override
+            public boolean shouldOverrideUrlLoading(
+                    WebView view, String url) {
+                return !isTrustedDashboardAsset(Uri.parse(url));
+            }
+        });
         webView.addJavascriptInterface(new Bridge(), "AndroidBridge");
         setContentView(webView);
 
@@ -65,11 +83,34 @@ public final class WebDashboardActivity extends Activity {
         webView.loadUrl("file:///android_asset/web/index.html");
     }
 
+    private static boolean isTrustedDashboardAsset(Uri uri) {
+        if (uri == null
+                || !"file".equalsIgnoreCase(uri.getScheme())) {
+            return false;
+        }
+        String authority = uri.getAuthority();
+        if (authority != null && !authority.isEmpty()) {
+            return false;
+        }
+        String path = uri.getPath();
+        if (path == null
+                || !path.startsWith("/android_asset/web/")) {
+            return false;
+        }
+        for (String segment : path.split("/")) {
+            if ("..".equals(segment)) return false;
+        }
+        return true;
+    }
+
     private void pushStatus() {
         if (webView == null) return;
-        final String status = statusText().replace("\\", "\\\\").replace("'", "\\'");
+        // JSON quoting also escapes embedded newlines/control characters. Directly
+        // interpolating status into a single-quoted JS string breaks on multiline
+        // peer status and can become code injection if its data ever changes.
+        final String status = JSONObject.quote(statusText());
         webView.post(() -> webView.evaluateJavascript(
-                "setStatus('" + status + "')", null));
+                "setStatus(" + status + ")", null));
     }
 
     private String statusText() {
