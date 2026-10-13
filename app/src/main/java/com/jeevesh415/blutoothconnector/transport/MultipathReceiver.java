@@ -10,7 +10,6 @@ import java.nio.channels.FileChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.StandardCopyOption;
-import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.BitSet;
 import java.util.HashMap;
@@ -663,18 +662,6 @@ public final class MultipathReceiver {
         out.flush();
     }
 
-    private static long partialBytes(File directory) {
-        File[] files = directory.listFiles((dir, name) ->
-                name != null && name.endsWith(".part"));
-        if (files == null) return 0L;
-        long total = 0L;
-        for (File file : files) {
-            long length = file.length();
-            if (Long.MAX_VALUE - total < length) return Long.MAX_VALUE;
-            total += length;
-        }
-        return total;
-    }
 
     private static void cleanupStaleStates(File directory) {
         long cutoff =
@@ -717,6 +704,21 @@ public final class MultipathReceiver {
                 if (isTrackedPartLocked(part)) continue;
                 try { metadata.delete(); } catch (Exception ignored) {}
                 try { part.delete(); } catch (Exception ignored) {}
+            }
+
+            // A process can die after creating a partial file but before writing
+            // its metadata. Retire only old, untracked orphan files.
+            File[] partialFiles = directory.listFiles(
+                    (dir, name) -> name != null && name.endsWith(".part"));
+            if (partialFiles != null) {
+                for (File part : partialFiles) {
+                    if (part.lastModified() >= cutoff
+                            || metadataFile(part).exists()
+                            || isTrackedPartLocked(part)) {
+                        continue;
+                    }
+                    try { part.delete(); } catch (Exception ignored) {}
+                }
             }
         }
     }
