@@ -156,7 +156,7 @@ public final class SessionAuthenticator {
         }
     }
 
-    public static void pinPeer(
+    public static synchronized void pinPeer(
             Context context,
             String peerAddress,
             byte[] publicKey) {
@@ -164,13 +164,37 @@ public final class SessionAuthenticator {
             throw new IllegalArgumentException("Invalid peer address");
         }
         validateBlob(publicKey, "publicKey");
-        prefs(context).edit()
+
+        // Check-and-set under one process-wide lock closes the first-contact
+        // race where two simultaneous sessions could otherwise overwrite the
+        // TOFU pin after each independently observed "no existing pin".
+        byte[] existing = pinnedPeer(context, peerAddress);
+        requireConsistentPin(existing, publicKey);
+        if (existing != null) return;
+
+        boolean saved = prefs(context).edit()
                 .putString(
                         KEY_PREFIX + fingerprint(peerAddress),
                         Base64.encodeToString(
                                 publicKey,
                                 Base64.NO_WRAP))
-                .apply();
+                .commit();
+        if (!saved) {
+            throw new IllegalStateException(
+                    "Unable to persist peer identity pin");
+        }
+    }
+
+    static void requireConsistentPin(
+            byte[] pinnedPublicKey,
+            byte[] candidatePublicKey) {
+        validateBlob(candidatePublicKey, "candidatePublicKey");
+        if (pinnedPublicKey != null
+                && !MessageDigest.isEqual(
+                        pinnedPublicKey, candidatePublicKey)) {
+            throw new SecurityException(
+                    "Peer application identity changed");
+        }
     }
 
     public static String publicKeyFingerprint(byte[] publicKey) {
