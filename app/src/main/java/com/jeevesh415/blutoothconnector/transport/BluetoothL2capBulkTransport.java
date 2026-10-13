@@ -20,6 +20,8 @@ import java.io.OutputStream;
 import java.io.IOException;
 import java.io.RandomAccessFile;
 import java.nio.charset.StandardCharsets;
+import java.nio.file.Files;
+import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.UUID;
@@ -61,6 +63,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int CONNECT_TIMEOUT_MS = 8_000;
     private static final int IO_TIMEOUT_MS = 30_000;
+    private static final Object PARTIAL_STORAGE_LOCK = new Object();
     private static final int WATCHDOG_PERIOD_MS = 5_000;
 
     private static final ExecutorService CONNECT_EXECUTOR =
@@ -198,6 +201,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             }
 
             String transferId = readString(in, MAX_ID_BYTES);
+            if (!transferId.matches("[A-Za-z0-9._-]{1,64}")) {
+                throw new IOException("Invalid Bluetooth transfer id");
+            }
             long fileSize = in.readLong();
             int chunkSize = in.readInt();
             int chunkCount = in.readInt();
@@ -205,24 +211,36 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             in.readFully(expectedHash);
             String name = readString(in, MAX_NAME_BYTES);
 
-            if (fileSize < 1
-                    || fileSize > MAX_TRANSFER_BYTES
-                    || chunkSize < 16 * 1024
-                    || chunkSize > CHUNK_BYTES
-                    || chunkCount < 1
-                    || chunkCount > MAX_CHUNKS) {
-                throw new IOException("Invalid Bluetooth transfer metadata");
-            }
+            validateTransferMetadata(fileSize, chunkSize, chunkCount);
 
             File destination = safeDestination(directory, name);
-            partial = new File(
+            File candidatePartial = new File(
                     destination.getParentFile(),
                     "." + destination.getName() + "." + transferId + ".part");
 
-            long currentPartialBytes = partialBytes(directory);
-            if (directory.getUsableSpace() < fileSize
-                    || currentPartialBytes > MAX_PARTIAL_BYTES - fileSize) {
-                throw new IOException("Insufficient Bluetooth bulk storage budget");
+            // Reserve the declared size atomically before any transfer handler can
+            // pass the same aggregate-storage check. L2CAP transfers are not resumed;
+            // a duplicate transfer id must not share/delete another handler's file.
+            synchronized (PARTIAL_STORAGE_LOCK) {
+                if (candidatePartial.exists()) {
+                    throw new IOException("Bluetooth transfer id is already active");
+                }
+                long currentPartialBytes = partialBytes(directory);
+                if (directory.getUsableSpace() < fileSize
+                        || currentPartialBytes > MAX_PARTIAL_BYTES - fileSize) {
+                    throw new IOException("Insufficient Bluetooth bulk storage budget");
+                }
+                try (RandomAccessFile reservation =
+                             new RandomAccessFile(candidatePartial, "rw")) {
+                    reservation.setLength(fileSize);
+                } catch (IOException allocationError) {
+                    // This handler owns the path because it was absent under the
+                    // storage lock. Remove a partial reservation if allocation failed.
+                    //noinspection ResultOfMethodCallIgnored
+                    candidatePartial.delete();
+                    throw allocationError;
+                }
+                partial = candidatePartial;
             }
 
             try (RandomAccessFile output = new RandomAccessFile(partial, "rw")) {
@@ -285,12 +303,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                 throw new IOException("Bluetooth bulk SHA-256 mismatch");
             }
 
-            if (destination.exists() && !destination.delete()) {
-                throw new IOException("Cannot replace destination");
-            }
-            if (!partial.renameTo(destination)) {
-                throw new IOException("Cannot promote Bluetooth transfer");
-            }
+            promotePartial(partial, destination);
             promoted = true;
 
             out.writeInt(0);
@@ -530,6 +543,40 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         @Override public void write(byte[] b, int off, int len) throws IOException {
             super.write(b, off, len);
             activity.set(System.nanoTime());
+        }
+    }
+
+    static void validateTransferMetadata(
+            long fileSize, int chunkSize, int chunkCount) throws IOException {
+        if (fileSize < 1
+                || fileSize > MAX_TRANSFER_BYTES
+                || chunkSize < 16 * 1024
+                || chunkSize > CHUNK_BYTES
+                || chunkCount < 1
+                || chunkCount > MAX_CHUNKS) {
+            throw new IOException("Invalid Bluetooth transfer metadata");
+        }
+
+        long expectedChunkCount = (fileSize - 1L) / chunkSize + 1L;
+        if (chunkCount != expectedChunkCount) {
+            throw new IOException(
+                    "Bluetooth chunk count does not match declared file size");
+        }
+    }
+
+    private static void promotePartial(
+            File partial, File destination) throws IOException {
+        try {
+            Files.move(
+                    partial.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            Files.move(
+                    partial.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
         }
     }
 
