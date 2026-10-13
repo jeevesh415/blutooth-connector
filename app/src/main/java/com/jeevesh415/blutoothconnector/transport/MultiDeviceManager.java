@@ -19,14 +19,19 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 public final class MultiDeviceManager implements AutoCloseable {
     public static final int MAX_CLASSIC_PEERS = 7;
     private static final int MAX_BULK_ENDPOINTS_PER_PEER = 32;
+    private static final int MAX_CONCURRENT_BULK_TRANSFERS = 4;
+    private static final int MAX_QUEUED_BULK_TRANSFERS = 7;
     private static final long HEARTBEAT_MS = 5000;
     private static final long DEAD_AFTER_MS = 15000;
 
@@ -51,8 +56,19 @@ public final class MultiDeviceManager implements AutoCloseable {
     private final Map<String, Boolean> connecting = new ConcurrentHashMap<>();
     private final ScheduledExecutorService scheduler =
             Executors.newScheduledThreadPool(2);
-    private final java.util.concurrent.ExecutorService bulkExecutor =
-            Executors.newCachedThreadPool();
+    private final ThreadPoolExecutor bulkExecutor =
+            new ThreadPoolExecutor(
+                    MAX_CONCURRENT_BULK_TRANSFERS,
+                    MAX_CONCURRENT_BULK_TRANSFERS,
+                    0L,
+                    TimeUnit.MILLISECONDS,
+                    new ArrayBlockingQueue<>(MAX_QUEUED_BULK_TRANSFERS),
+                    task -> {
+                        Thread thread = new Thread(task, "bulk-transfer");
+                        thread.setDaemon(true);
+                        return thread;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
     private final CopyOnWriteArrayList<Listener> listeners =
             new CopyOnWriteArrayList<>();
     private volatile boolean closed;
@@ -154,9 +170,10 @@ public final class MultiDeviceManager implements AutoCloseable {
             return;
         }
 
-        bulkExecutor.execute(() -> {
-            try {
-                List<BulkEndpointInfo> endpoints =
+        try {
+            bulkExecutor.execute(() -> {
+                try {
+                    List<BulkEndpointInfo> endpoints =
                         new ArrayList<>(session.bulkEndpoints);
                 if (endpoints.isEmpty()) {
                     throw new IllegalStateException("No bulk endpoint advertised");
@@ -200,10 +217,19 @@ public final class MultiDeviceManager implements AutoCloseable {
                 long bytes = MultipathFileTransfer.send(
                         bulkContext, file, endpoints, 4);
                 if (listener != null) listener.onComplete(session, bytes);
-            } catch (Exception error) {
-                if (listener != null) listener.onError(session, error);
+                } catch (Exception error) {
+                    if (listener != null) listener.onError(session, error);
+                }
+            });
+        } catch (RejectedExecutionException saturated) {
+            if (listener != null) {
+                listener.onError(
+                        session,
+                        new IllegalStateException(
+                                "Bulk-transfer queue is full; retry after an active transfer finishes",
+                                saturated));
             }
-        });
+        }
     }
 
     public void send(String address, Frame frame) throws Exception {
