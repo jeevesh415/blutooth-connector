@@ -1,6 +1,6 @@
 # Engineering Audit — Blutooth Connector
 
-**Audit date:** 2026-10-05  
+**Audit date:** 2026-10-14  
 **Scope:** Android application, transport/protocol/security paths, build toolchain, CI structure, tests, and formal-verification assets.
 
 ## Executive result
@@ -50,6 +50,16 @@ The control plane advertises optional bulk endpoints. `MultipathFileTransfer` di
 
 `BluetoothL2capBulkTransport` mirrors the same security model over LE L2CAP CoC, including packet-aware buffering, deterministic IVs, per-chunk authorization, watchdog timeouts, safe destination handling, and the corrected 8/16 GiB resource limits.
 
+### Release signing and update identity
+
+The Android package identity remains `com.jeevesh415.blutoothconnector`; it is not changed to work around installer conflicts. The distributable `release` variant uses a persistent keystore supplied through GitHub Actions secrets, while debug builds remain the CI/test variant. Release publication is skipped when secrets are absent, rather than publishing a new runner-generated debug certificate. The release workflow checks the APK package/SDK metadata, assigns monotonically increasing release version codes, verifies artifact bytes after publication, and refuses to replace an existing signed APK when its certificate digest changes. The first switch from an existing debug-signed installation still requires a one-time uninstall; later releases should update in place when the same keystore is retained.
+
+### Transfer-state hardening
+
+The multipath receiver now tracks in-flight chunk handlers separately from resumable transfer state. Cleanup expires only inactive stale state, does not evict live work simply because the stored-state limit was reached, rejects new state when capacity is exhausted, and accounts for declared sizes of sparse/on-disk partial transfers before accepting another transfer. It also cleans aged orphan partial files only when no live state tracks them. Concurrent retries of a final chunk share the completed state and acknowledge the already-promoted file rather than trying to promote a missing partial a second time.
+
+The LE L2CAP receiver now requires the declared chunk count to equal the exact ceiling of file size divided by chunk size, validates transfer IDs before constructing paths, atomically reserves a partial file under a shared storage lock, rejects duplicate in-progress IDs, and uses atomic replacement (with a safe fallback) to preserve an existing destination if promotion fails. Unit coverage was added for valid/invalid L2CAP chunk geometry.
+
 ### Media and alternate transports
 
 `LowLatencyRtcEngine` and `RtcPeerManager` provide WebRTC screen/microphone media and unordered control DataChannel handling. MediaProjection and microphone permissions remain explicit. `WifiDirectPathManager` and `WifiAwarePathManager` expose optional local-network paths and clean up sessions/receivers. Android capability/version checks gate these paths at runtime.
@@ -69,9 +79,11 @@ The control plane advertises optional bulk endpoints. `MultipathFileTransfer` di
 - Destination names, IDs, chunk counts, file sizes, and partial storage are bounded.
 - Commands reject unsupported/unauthorized/replayed frames before execution.
 
-## Validation performed
+## Historical local validation snapshot
 
-Command executed with JDK 17, Android SDK platform 36/build-tools 36.0.0, and Gradle wrapper:
+The metrics below record the earlier 2026-10-05 local run and are **not** evidence that the later 2026-10-14 signing and transfer-state changes were run locally. The current branch's commit-specific verification is provided by its GitHub Actions workflows.
+
+Command recorded for the earlier snapshot (JDK 17, Android SDK platform 36/build-tools 36.0.0, and Gradle wrapper):
 
 ```bash
 ./gradlew --no-daemon testDebugUnitTest lintDebug assembleDebug
