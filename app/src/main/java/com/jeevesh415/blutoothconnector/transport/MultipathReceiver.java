@@ -13,7 +13,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.StandardOpenOption;
 import java.security.MessageDigest;
 import java.util.BitSet;
+import java.util.HashMap;
+import java.util.HashSet;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
 public final class MultipathReceiver {
@@ -27,6 +30,7 @@ public final class MultipathReceiver {
     private static final long MAX_TRANSFER_BYTES = 8L * 1024L * 1024L * 1024L;
     private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int MAX_STORED_TRANSFERS = 64;
+    private static final Object STATE_LOCK = new Object();
     private static final Map<String, State> STATES =
             new ConcurrentHashMap<>();
 
@@ -41,6 +45,8 @@ public final class MultipathReceiver {
         final byte[] hash;
         final int chunkCount;
         final BitSet complete;
+        // Guarded by STATE_LOCK. Active chunk handlers may never be evicted.
+        int activeChunks;
         volatile long lastTouchedMs;
 
         State(File part, File finalFile, String originalName,
@@ -245,128 +251,256 @@ public final class MultipathReceiver {
                 directory.getCanonicalPath()
                         + "|" + transferId
                         + ":" + BulkTransferProtocol.hex(hash);
-        long currentPartialBytes = partialBytes(directory);
-        if (currentPartialBytes > MAX_PARTIAL_BYTES - fileSize) {
-            writeResponse(out, 7, 0);
-            throw new java.io.IOException(
-                    "Bulk partial storage budget exceeded");
-        }
-
-        State state = getOrCreateState(
+        File expectedPart = new File(
                 directory,
-                stateKey,
-                transferId,
-                safeName,
-                originalName,
-                fileSize,
-                hash,
-                chunkCount);
-
-        if (state.fileSize != fileSize
-                || state.chunkCount != chunkCount
-                || !state.originalName.equals(originalName)
-                || !MessageDigest.isEqual(state.hash, hash)) {
-            writeResponse(out, 5, 0);
-            throw new java.io.IOException(
-                    "Transfer metadata conflict");
+                BulkTransferProtocol.hex(hash)
+                        + "-" + transferId + ".part");
+        State state;
+        try {
+            state = acquireState(
+                    directory,
+                    stateKey,
+                    expectedPart,
+                    safeName,
+                    originalName,
+                    fileSize,
+                    hash,
+                    chunkCount);
+        } catch (java.io.IOException capacityOrStateError) {
+            writeResponse(out, 7, 0);
+            throw capacityOrStateError;
         }
 
         File completedFile = null;
+        try {
+            if (state.fileSize != fileSize
+                    || state.chunkCount != chunkCount
+                    || !state.originalName.equals(originalName)
+                    || !MessageDigest.isEqual(state.hash, hash)) {
+                writeResponse(out, 5, 0);
+                throw new java.io.IOException(
+                        "Transfer metadata conflict");
+            }
 
-        synchronized (state.lock) {
-            state.lastTouchedMs =
-                    System.currentTimeMillis();
+            synchronized (state.lock) {
+                state.lastTouchedMs =
+                        System.currentTimeMillis();
 
-            if (!state.complete.get(chunkIndex)) {
-                try (RandomAccessFile raf =
-                             new RandomAccessFile(
-                                     state.part, "rw");
-                     FileChannel channel =
-                             raf.getChannel()) {
-                    ByteBuffer data =
-                            ByteBuffer.wrap(plaintext);
-                    long written = 0;
-                    while (data.hasRemaining()) {
-                        int writtenNow =
-                                channel.write(
-                                        data, offset + written);
-                        if (writtenNow <= 0) {
-                            throw new java.io.IOException(
-                                    "Short chunk write");
+                if (!state.complete.get(chunkIndex)) {
+                    try (RandomAccessFile raf =
+                                 new RandomAccessFile(
+                                         state.part, "rw");
+                         FileChannel channel =
+                                 raf.getChannel()) {
+                        ByteBuffer data =
+                                ByteBuffer.wrap(plaintext);
+                        long written = 0;
+                        while (data.hasRemaining()) {
+                            int writtenNow =
+                                    channel.write(
+                                            data, offset + written);
+                            if (writtenNow <= 0) {
+                                throw new java.io.IOException(
+                                        "Short chunk write");
+                            }
+                            written += writtenNow;
                         }
-                        written += writtenNow;
                     }
+                    state.complete.set(chunkIndex);
+                    persistState(state);
                 }
-                state.complete.set(chunkIndex);
-                persistState(state);
+
+                boolean finished =
+                        state.complete.cardinality()
+                                == state.chunkCount;
+
+                if (finished) {
+                    byte[] actual =
+                            BulkTransferProtocol.sha256(
+                                    state.part);
+                    if (!MessageDigest.isEqual(
+                            actual, state.hash)) {
+                        state.complete.clear(chunkIndex);
+                        writeResponse(out, 6, length);
+                        throw new java.io.IOException(
+                                "Final SHA-256 integrity check failed");
+                    }
+
+                    promotePartial(state.part, state.finalFile);
+                    synchronized (STATE_LOCK) {
+                        STATES.remove(stateKey, state);
+                    }
+                    deleteMetadata(state);
+                    completedFile = state.finalFile;
+                }
             }
 
-            boolean finished =
-                    state.complete.cardinality()
-                            == state.chunkCount;
-
-            if (finished) {
-                byte[] actual =
-                        BulkTransferProtocol.sha256(
-                                state.part);
-                if (!MessageDigest.isEqual(
-                        actual, state.hash)) {
-                    state.complete.clear(chunkIndex);
-                    writeResponse(out, 6, length);
-                    throw new java.io.IOException(
-                            "Final SHA-256 integrity check failed");
-                }
-
-                if (state.finalFile.exists()
-                        && !state.finalFile.delete()) {
-                    throw new java.io.IOException(
-                            "Cannot replace existing file");
-                }
-                if (!state.part.renameTo(
-                        state.finalFile)) {
-                    throw new java.io.IOException(
-                            "Cannot finalize received file");
-                }
-                STATES.remove(stateKey);
-                deleteMetadata(state);
-                completedFile = state.finalFile;
-            }
+            writeResponse(out, 0, length);
+            return completedFile;
+        } finally {
+            releaseState(state);
         }
-
-        writeResponse(out, 0, length);
-        return completedFile;
     }
 
-    private static State getOrCreateState(
+    private static State acquireState(
             File directory,
             String stateKey,
-            String transferId,
+            File part,
             String safeName,
             String originalName,
             long fileSize,
             byte[] hash,
             int chunkCount) throws java.io.IOException {
-        State existing = STATES.get(stateKey);
-        if (existing != null) {
-            return existing;
+        synchronized (STATE_LOCK) {
+            State existing = STATES.get(stateKey);
+            if (existing != null) {
+                existing.activeChunks++;
+                existing.lastTouchedMs =
+                        System.currentTimeMillis();
+                return existing;
+            }
+
+            long cutoff =
+                    System.currentTimeMillis()
+                            - 10 * 60 * 1000L;
+            evictExpiredStatesLocked(cutoff);
+            if (STATES.size() >= MAX_STORED_TRANSFERS) {
+                throw new java.io.IOException(
+                        "Too many concurrent or resumable transfers");
+            }
+
+            long reservedByOtherTransfers =
+                    reservedPartialBytes(directory, part);
+            if (reservedByOtherTransfers
+                    > MAX_PARTIAL_BYTES - fileSize) {
+                throw new java.io.IOException(
+                        "Bulk partial storage budget exceeded");
+            }
+
+            long existingPartBytes =
+                    part.isFile()
+                            ? Math.min(part.length(), fileSize)
+                            : 0L;
+            long additionalBytes =
+                    fileSize - existingPartBytes;
+            if (directory.getUsableSpace() < additionalBytes) {
+                throw new java.io.IOException(
+                        "Insufficient free space for partial transfer");
+            }
+
+            File finalFile = new File(directory, safeName);
+            State loaded = loadState(
+                    part,
+                    finalFile,
+                    originalName,
+                    fileSize,
+                    hash,
+                    chunkCount);
+            loaded.activeChunks = 1;
+            loaded.lastTouchedMs =
+                    System.currentTimeMillis();
+            STATES.put(stateKey, loaded);
+            return loaded;
+        }
+    }
+
+    private static void releaseState(State state) {
+        synchronized (STATE_LOCK) {
+            if (state.activeChunks > 0) {
+                state.activeChunks--;
+            }
+            state.lastTouchedMs =
+                    System.currentTimeMillis();
+        }
+    }
+
+    private static long reservedPartialBytes(
+            File directory,
+            File excludedPart) throws java.io.IOException {
+        String root = directory.getCanonicalPath();
+        String excluded = excludedPart.getCanonicalPath();
+        Map<String, Long> tracked = new HashMap<>();
+
+        for (State state : STATES.values()) {
+            if (!state.part.getParentFile()
+                    .getCanonicalPath().equals(root)) {
+                continue;
+            }
+            String path = state.part.getCanonicalPath();
+            if (!path.equals(excluded)) {
+                tracked.put(path, state.fileSize);
+            }
         }
 
-        File part = new File(
-                directory,
-                BulkTransferProtocol.hex(hash)
-                        + "-" + transferId + ".part");
-        File finalFile = new File(directory, safeName);
+        long total = 0L;
+        Set<String> seen = new HashSet<>();
+        File[] parts = directory.listFiles(
+                (dir, name) -> name != null && name.endsWith(".part"));
+        if (parts != null) {
+            for (File part : parts) {
+                String path = part.getCanonicalPath();
+                if (path.equals(excluded)) continue;
+                seen.add(path);
+                Long inMemoryReservation = tracked.remove(path);
+                long declared = inMemoryReservation != null
+                        ? inMemoryReservation
+                        : declaredFileSize(part);
+                long reserved = Math.max(part.length(), declared);
+                total = saturatedAdd(total, reserved);
+            }
+        }
 
-        State loaded = loadState(
-                part,
-                finalFile,
-                originalName,
-                fileSize,
-                hash,
-                chunkCount);
+        // A newly registered state can reserve its full size before the
+        // first chunk creates the partial file on disk.
+        for (Map.Entry<String, Long> entry : tracked.entrySet()) {
+            if (!seen.contains(entry.getKey())) {
+                total = saturatedAdd(total, entry.getValue());
+            }
+        }
+        return total;
+    }
 
-        State raced = STATES.putIfAbsent(stateKey, loaded);
-        return raced == null ? loaded : raced;
+    private static long declaredFileSize(File part) {
+        File metadata = metadataFile(part);
+        if (!metadata.isFile()) return part.length();
+        try (DataInputStream in =
+                     new DataInputStream(
+                             new java.io.BufferedInputStream(
+                                     new java.io.FileInputStream(metadata)))) {
+            if (in.readInt() != 0x42434D31
+                    || in.readInt() != VERSION) {
+                return part.length();
+            }
+            long size = in.readLong();
+            return size > 0 && size <= MAX_TRANSFER_BYTES
+                    ? size
+                    : part.length();
+        } catch (Exception ignored) {
+            return part.length();
+        }
+    }
+
+    private static long saturatedAdd(long left, long right) {
+        if (right < 0 || Long.MAX_VALUE - left < right) {
+            return Long.MAX_VALUE;
+        }
+        return left + right;
+    }
+
+    private static void promotePartial(
+            File part, File destination) throws java.io.IOException {
+        try {
+            Files.move(
+                    part.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING,
+                    StandardCopyOption.ATOMIC_MOVE);
+        } catch (java.nio.file.AtomicMoveNotSupportedException unsupported) {
+            Files.move(
+                    part.toPath(),
+                    destination.toPath(),
+                    StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 
     private static State loadState(
@@ -546,34 +680,68 @@ public final class MultipathReceiver {
         long cutoff =
                 System.currentTimeMillis()
                         - 10 * 60 * 1000L;
+        String root;
+        try {
+            root = directory.getCanonicalPath();
+        } catch (java.io.IOException error) {
+            return;
+        }
 
-        for (Map.Entry<String, State> entry
-                : STATES.entrySet()) {
-            State state = entry.getValue();
-            boolean expired =
-                    state.lastTouchedMs < cutoff;
-            boolean overLimit =
-                    STATES.size() > MAX_STORED_TRANSFERS;
-
-            if (expired || overLimit) {
-                if (STATES.remove(entry.getKey(), state)) {
-                    deletePartialState(state);
+        synchronized (STATE_LOCK) {
+            for (Map.Entry<String, State> entry : STATES.entrySet()) {
+                State state = entry.getValue();
+                try {
+                    File parent = state.part.getParentFile();
+                    boolean sameDirectory = parent != null
+                            && parent.getCanonicalPath().equals(root);
+                    if (sameDirectory
+                            && state.activeChunks == 0
+                            && state.lastTouchedMs < cutoff
+                            && STATES.remove(entry.getKey(), state)) {
+                        deletePartialState(state);
+                    }
+                } catch (java.io.IOException ignored) {
+                    // Do not evict a state when its location cannot be checked.
                 }
             }
-        }
 
-        File[] metadataFiles = directory.listFiles(
-                (dir, name) -> name.endsWith(".meta"));
-        if (metadataFiles == null) return;
+            File[] metadataFiles = directory.listFiles(
+                    (dir, name) -> name != null && name.endsWith(".meta"));
+            if (metadataFiles == null) return;
 
-        for (File metadata : metadataFiles) {
-            if (metadata.lastModified() >= cutoff) continue;
-            File part = new File(
-                    metadata.getPath()
-                            .substring(0, metadata.getPath().length() - 5));
-            try { metadata.delete(); } catch (Exception ignored) {}
-            try { part.delete(); } catch (Exception ignored) {}
+            for (File metadata : metadataFiles) {
+                if (metadata.lastModified() >= cutoff) continue;
+                File part = new File(
+                        metadata.getPath()
+                                .substring(0, metadata.getPath().length() - 5));
+                if (isTrackedPartLocked(part)) continue;
+                try { metadata.delete(); } catch (Exception ignored) {}
+                try { part.delete(); } catch (Exception ignored) {}
+            }
         }
+    }
+
+    private static void evictExpiredStatesLocked(long cutoff) {
+        for (Map.Entry<String, State> entry : STATES.entrySet()) {
+            State state = entry.getValue();
+            if (state.activeChunks == 0
+                    && state.lastTouchedMs < cutoff
+                    && STATES.remove(entry.getKey(), state)) {
+                deletePartialState(state);
+            }
+        }
+    }
+
+    private static boolean isTrackedPartLocked(File part) {
+        try {
+            String candidate = part.getCanonicalPath();
+            for (State state : STATES.values()) {
+                if (state.part.getCanonicalPath().equals(candidate)) {
+                    return true;
+                }
+            }
+        } catch (java.io.IOException ignored) {}
+        return false;
     }
 
     private static void deletePartialState(State state) {
