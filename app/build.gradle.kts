@@ -6,12 +6,20 @@ android {
     namespace = "com.jeevesh415.blutoothconnector"
     compileSdk = 36
 
+    val configuredVersionCode = System.getenv("ANDROID_VERSION_CODE")
+        ?.toIntOrNull()
+        ?.takeIf { it > 0 }
+        ?: 8
+    val configuredVersionName = System.getenv("ANDROID_VERSION_NAME")
+        ?.takeIf { it.isNotBlank() }
+        ?: "0.8.0"
+
     defaultConfig {
         applicationId = "com.jeevesh415.blutoothconnector"
         minSdk = 29
         targetSdk = 36
-        versionCode = 8
-        versionName = "0.8.0"
+        versionCode = configuredVersionCode
+        versionName = configuredVersionName
     }
 
     compileOptions {
