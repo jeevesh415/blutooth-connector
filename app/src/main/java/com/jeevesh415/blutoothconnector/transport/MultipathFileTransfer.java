@@ -8,6 +8,8 @@ import java.io.DataOutputStream;
 import java.io.EOFException;
 import java.io.File;
 import java.io.RandomAccessFile;
+import java.net.Inet6Address;
+import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.net.Socket;
 import java.nio.ByteBuffer;
@@ -143,13 +145,29 @@ public final class MultipathFileTransfer {
         List<Candidate> candidates =
                 new ArrayList<>();
 
-        for (BulkEndpointInfo endpoint : endpoints) {
-            if (endpoint == null
-                    || endpoint.host == null
-                    || endpoint.host.isEmpty()
-                    || endpoint.port < 1) {
+        for (BulkEndpointInfo advertisedEndpoint : endpoints) {
+            if (advertisedEndpoint == null
+                    || advertisedEndpoint.port < 1
+                    || advertisedEndpoint.tokenBase64 == null
+                    || advertisedEndpoint.tokenBase64.isEmpty()) {
                 continue;
             }
+
+            // These addresses arrive from the remote peer. Never use an
+            // advertised DNS name or public Internet address as a socket target.
+            // Context-free loopback is retained only for local loopback tests.
+            String safeHost = normalizeLocalEndpointHost(
+                    advertisedEndpoint.host, context == null);
+            if (safeHost == null) continue;
+            BulkEndpointInfo endpoint =
+                    safeHost.equals(advertisedEndpoint.host)
+                            ? advertisedEndpoint
+                            : new BulkEndpointInfo(
+                                    safeHost,
+                                    advertisedEndpoint.port,
+                                    advertisedEndpoint.tokenBase64,
+                                    advertisedEndpoint.transport,
+                                    advertisedEndpoint.psm);
 
             boolean matchedNetwork = false;
 
@@ -295,6 +313,69 @@ public final class MultipathFileTransfer {
             return total;
         } finally {
             pool.shutdownNow();
+        }
+    }
+
+    static String normalizeLocalEndpointHost(
+            String host, boolean allowLoopback) {
+        if (host == null || host.isEmpty() || !host.equals(host.trim())) {
+            return null;
+        }
+
+        try {
+            if (host.indexOf(':') >= 0) {
+                String addressPart = host;
+                int scope = host.indexOf('%');
+                if (scope >= 0) {
+                    String zone = host.substring(scope + 1);
+                    if (zone.isEmpty()
+                            || !zone.matches("[A-Za-z0-9_.-]{1,64}")) {
+                        return null;
+                    }
+                    addressPart = host.substring(0, scope);
+                }
+                if (!addressPart.contains(":")
+                        || !addressPart.matches("(?i)[0-9a-f:.]+")) {
+                    return null;
+                }
+                InetAddress parsed = InetAddress.getByName(addressPart);
+                if (!(parsed instanceof Inet6Address)) return null;
+
+                byte[] raw = parsed.getAddress();
+                boolean uniqueLocal = (raw[0] & 0xfe) == 0xfc;
+                if ((allowLoopback && parsed.isLoopbackAddress())
+                        || parsed.isLinkLocalAddress()
+                        || parsed.isSiteLocalAddress()
+                        || uniqueLocal) {
+                    // The peer's interface scope is not meaningful on this phone.
+                    return parsed.getHostAddress();
+                }
+                return null;
+            }
+
+            if (!host.matches("[0-9]{1,3}(\\\\.[0-9]{1,3}){3}")) {
+                return null; // no hostnames, shorthand IPv4, or numeric tricks
+            }
+            String[] octets = host.split("\\\\.");
+            byte[] raw = new byte[4];
+            for (int i = 0; i < octets.length; i++) {
+                int value = Integer.parseInt(octets[i]);
+                if (value < 0 || value > 255) return null;
+                raw[i] = (byte) value;
+            }
+            InetAddress parsed = InetAddress.getByAddress(raw);
+            boolean sharedAddressSpace = (raw[0] & 0xff) == 100
+                    && (raw[1] & 0xff) >= 64
+                    && (raw[1] & 0xff) <= 127;
+            if ((allowLoopback && parsed.isLoopbackAddress())
+                    || parsed.isLinkLocalAddress()
+                    || parsed.isSiteLocalAddress()
+                    || sharedAddressSpace) {
+                return parsed.getHostAddress();
+            }
+            return null;
+        } catch (Exception invalidAddress) {
+            return null;
         }
     }
 
