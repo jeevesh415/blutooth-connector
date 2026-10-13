@@ -8,6 +8,41 @@ import java.util.ArrayList;
 import java.util.List;
 
 public final class MultipathFileTransferLimitsTest {
+    @Test
+    public void acceptsPrivateIpLiteralsAndRemovesRemoteIpv6Scope() {
+        assertEquals(
+                "192.168.1.2",
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "192.168.1.2", false));
+        assertNotNull(
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "fd12::1%aware0", false));
+    }
+
+    @Test
+    public void rejectsPublicAddressesAndHostnames() {
+        assertNull(
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "8.8.8.8", false));
+        assertNull(
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "example.com", false));
+        assertNull(
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "2606:4700:4700::1111", false));
+    }
+
+    @Test
+    public void loopbackIsAllowedOnlyForContextFreeTransfers() {
+        assertEquals(
+                "127.0.0.1",
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "127.0.0.1", true));
+        assertNull(
+                MultipathFileTransfer.normalizeLocalEndpointHost(
+                        "127.0.0.1", false));
+    }
+
     @Test(expected = IllegalArgumentException.class)
     public void rejectsMoreThanThirtyTwoEndpointsBeforeScheduling() throws Exception {
         File source = Files.createTempFile("bcl-transfer-limit", ".bin").toFile();
