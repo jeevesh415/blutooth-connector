@@ -63,7 +63,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int CONNECT_TIMEOUT_MS = 8_000;
     private static final int IO_TIMEOUT_MS = 30_000;
-    private static final Object PARTIAL_STORAGE_LOCK = new Object();
+    private static final Object PARTIAL_STORAGE_LOCK = BulkPartialStorageLock.INSTANCE;
     private static final int WATCHDOG_PERIOD_MS = 5_000;
 
     private static final ExecutorService CONNECT_EXECUTOR =
@@ -226,7 +226,9 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
                 if (candidatePartial.exists()) {
                     throw new IOException("Bluetooth transfer id is already active");
                 }
-                long currentPartialBytes = partialBytes(directory);
+                long currentPartialBytes =
+                        MultipathReceiver.reservedPartialBytes(
+                                directory, candidatePartial);
                 if (directory.getUsableSpace() < fileSize
                         || currentPartialBytes > MAX_PARTIAL_BYTES - fileSize) {
                     throw new IOException("Insufficient Bluetooth bulk storage budget");
@@ -618,18 +620,6 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
         }
     }
 
-    private static long partialBytes(File directory) {
-        File[] files = directory.listFiles((dir, name) ->
-                name != null && name.endsWith(".part"));
-        if (files == null) return 0L;
-        long total = 0L;
-        for (File file : files) {
-            long length = file.length();
-            if (Long.MAX_VALUE - total < length) return Long.MAX_VALUE;
-            total += length;
-        }
-        return total;
-    }
 
     private static int safePacketSize(int value) {
         return value > 0 ? Math.min(value, 64 * 1024) : 1024;
