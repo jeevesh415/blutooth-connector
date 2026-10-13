@@ -25,8 +25,11 @@ import java.nio.file.StandardCopyOption;
 import java.security.MessageDigest;
 import java.security.SecureRandom;
 import java.util.UUID;
+import java.util.concurrent.ArrayBlockingQueue;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.RejectedExecutionException;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.Future;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.TimeoutException;
@@ -63,6 +66,8 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private static final long MAX_PARTIAL_BYTES = 16L * 1024L * 1024L * 1024L;
     private static final int CONNECT_TIMEOUT_MS = 8_000;
     private static final int IO_TIMEOUT_MS = 30_000;
+    private static final int MAX_PARALLEL_RECEIVERS = 4;
+    private static final int MAX_QUEUED_RECEIVERS = 4;
     private static final Object PARTIAL_STORAGE_LOCK = BulkPartialStorageLock.INSTANCE;
     private static final int WATCHDOG_PERIOD_MS = 5_000;
 
@@ -97,8 +102,20 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
     private final BluetoothAdapter adapter;
     private final ExecutorService acceptExecutor =
             Executors.newSingleThreadExecutor();
-    private final ExecutorService transferExecutor =
-            Executors.newCachedThreadPool();
+    private final ThreadPoolExecutor transferExecutor =
+            new ThreadPoolExecutor(
+                    2,
+                    MAX_PARALLEL_RECEIVERS,
+                    30L,
+                    TimeUnit.SECONDS,
+                    new ArrayBlockingQueue<>(MAX_QUEUED_RECEIVERS),
+                    task -> {
+                        Thread thread = new Thread(
+                                task, "bluetooth-l2cap-receiver");
+                        thread.setDaemon(true);
+                        return thread;
+                    },
+                    new ThreadPoolExecutor.AbortPolicy());
     private final SecureRandom random = new SecureRandom();
     private final BluetoothThroughputOptimizer throughputOptimizer =
             new BluetoothThroughputOptimizer();
@@ -166,16 +183,29 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
     private void acceptLoop(BluetoothServerSocket expected) {
         while (server == expected) {
+            BluetoothSocket socket = null;
             try {
-                BluetoothSocket socket = expected.accept();
-                transferExecutor.execute(() -> receive(socket));
+                socket = expected.accept();
+                BluetoothSocket accepted = socket;
+                transferExecutor.execute(() -> receive(accepted));
+                socket = null; // ownership transferred to the receiver
+            } catch (RejectedExecutionException saturated) {
+                // Close excess incoming sockets instead of creating unbounded
+                // receiver threads for unauthenticated peers.
+                closeQuietly(socket);
             } catch (Exception error) {
+                closeQuietly(socket);
                 if (server == expected && listener != null) {
                     listener.onError(error);
                 }
                 return;
             }
         }
+    }
+
+    private static void closeQuietly(BluetoothSocket socket) {
+        if (socket == null) return;
+        try { socket.close(); } catch (Exception ignored) {}
     }
 
     private void receive(BluetoothSocket socket) {
