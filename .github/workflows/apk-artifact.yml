@@ -45,35 +45,33 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon testDebugUnitTest
 
-      - name: Check release signing secrets
-        id: signing
+      - name: Require release signing secrets
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
-          if [[ -n "$ANDROID_KEYSTORE_B64" \
-             && -n "$ANDROID_KEYSTORE_PASSWORD" \
-             && -n "$ANDROID_KEY_ALIAS" \
-             && -n "$ANDROID_KEY_PASSWORD" ]]; then
-            echo "available=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "available=false" >> "$GITHUB_OUTPUT"
-            echo "::warning::Release APK publication skipped. Configure ANDROID_KEYSTORE_B64, ANDROID_KEYSTORE_PASSWORD, ANDROID_KEY_ALIAS, and ANDROID_KEY_PASSWORD in repository Actions secrets."
+          set -euo pipefail
+          missing=()
+          [[ -n "$ANDROID_KEYSTORE_B64" ]] || missing+=("ANDROID_KEYSTORE_B64")
+          [[ -n "$ANDROID_KEYSTORE_PASSWORD" ]] || missing+=("ANDROID_KEYSTORE_PASSWORD")
+          [[ -n "$ANDROID_KEY_ALIAS" ]] || missing+=("ANDROID_KEY_ALIAS")
+          [[ -n "$ANDROID_KEY_PASSWORD" ]] || missing+=("ANDROID_KEY_PASSWORD")
+          if (( ${#missing[@]} > 0 )); then
+            printf '::error::Cannot publish update-safe APK. Missing repository Actions secrets: %s\n' "${missing[*]}"
+            exit 1
           fi
 
       - name: Decode release signing key
-        if: steps.signing.outputs.available == 'true'
-        env:
+                env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
         run: |
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
           test -s "$RUNNER_TEMP/release.keystore"
 
       - name: Build signed release APK
-        if: steps.signing.outputs.available == 'true'
-        env:
+                env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
@@ -84,8 +82,7 @@ jobs:
           gradle --no-daemon assembleRelease
 
       - name: Prepare release APK
-        if: steps.signing.outputs.available == 'true'
-        run: |
+                run: |
           set -euo pipefail
           cp app/build/outputs/apk/release/app-release.apk blutooth-connector.apk
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk)"
@@ -97,8 +94,7 @@ jobs:
           sha256sum blutooth-connector.apk | tee blutooth-connector.apk.sha256
 
       - name: Verify signing certificate continuity
-        if: steps.signing.outputs.available == 'true'
-        env:
+                env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -125,8 +121,7 @@ jobs:
           fi
 
       - name: Publish latest APK release
-        if: steps.signing.outputs.available == 'true'
-        env:
+                env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -149,8 +144,7 @@ jobs:
           cmp blutooth-connector.apk /tmp/apk-verify/blutooth-connector.apk
 
       - name: Upload CI artifact
-        if: steps.signing.outputs.available == 'true'
-        uses: actions/upload-artifact@v4
+                uses: actions/upload-artifact@v4
         with:
           name: blutooth-connector-apk
           path: |
