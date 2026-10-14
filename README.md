@@ -15,7 +15,7 @@ The repository builds the APK automatically in GitHub Actions. The complete buil
 
 **Supported Android:** Android 10 (API 29) and newer. Android 12+ enables additional capabilities where the platform provides them; Wi-Fi Aware and other newer transport capabilities remain runtime-gated rather than being required for installation.
 
-The download link opens the repository's **latest release**. The release workflow publishes a new signed APK only after tests pass, all four signing secrets are present, and the certificate matches the previously published signed APK. If signing secrets are missing, it deliberately skips publication and leaves the existing release unchanged.
+The download link opens the repository's **latest release**. The release workflow publishes a new signed APK only after tests pass, all four signing secrets are present, and the certificate matches the previously published signed APK. If signing secrets are missing, the release workflow fails clearly before publishing anything; Android CI remains a separate build/test check.
 
 ## Release signing
 
