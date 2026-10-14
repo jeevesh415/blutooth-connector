@@ -78,7 +78,7 @@ jobs:
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           ANDROID_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) \
-          ANDROID_VERSION_NAME="0.8.0+\${GITHUB_RUN_NUMBER}" \
+          ANDROID_VERSION_NAME="0.8.0+${GITHUB_RUN_NUMBER}" \
           gradle --no-daemon assembleRelease
 
       - name: Prepare release APK
