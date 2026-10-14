@@ -111,8 +111,15 @@ public final class RtcPeerManager implements AutoCloseable {
             engine.createControlChannel();
             engine.createOffer();
         } catch (Exception error) {
-            engines.remove(peer, engine);
-            engine.close();
+            // Remove this session's routing state before closing the peer
+            // connection so late CLOSED/ICE callbacks cannot act on a new one.
+            sessionIds.remove(peer, sessionId);
+            inboundControl.remove(peer);
+            outboundControl.remove(peer);
+            lastRemoteVideos.remove(peer);
+            if (engines.remove(peer, engine)) {
+                engine.close();
+            }
             listener.onError(peer, error);
         }
     }
@@ -240,6 +247,7 @@ public final class RtcPeerManager implements AutoCloseable {
                 context,
                 new LowLatencyRtcEngine.Listener() {
                     @Override public void onLocalOffer(String sdp) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         try {
                             send(session, Protocol.RTC_OFFER,
                                     new JSONObject()
@@ -251,6 +259,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     }
 
                     @Override public void onLocalAnswer(String sdp) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         try {
                             send(session, Protocol.RTC_ANSWER,
                                     new JSONObject()
@@ -262,6 +271,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     }
 
                     @Override public void onIceCandidate(IceCandidate candidate) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         try {
                             send(session, Protocol.RTC_ICE,
                                     new JSONObject()
@@ -275,6 +285,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     }
 
                     @Override public void onRemoteVideo(org.webrtc.VideoTrack track) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         lastRemoteVideos.put(peer, track);
                         try {
                             listener.onRemoteVideo(peer, track);
@@ -284,6 +295,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     }
 
                     @Override public void onDataMessage(String text) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         try {
                             handleControlEnvelope(peer, text);
                         } catch (Exception error) {
@@ -292,6 +304,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     }
 
                     @Override public void onState(String state) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         listener.onState(peer, state);
                         if ("mediaProjection:stopped".equals(state)) {
                             try {
@@ -309,6 +322,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     }
 
                     @Override public void onError(Exception error) {
+                        if (!isCurrentSession(peer, sessionId)) return;
                         listener.onError(peer, error);
                     }
                 });
@@ -316,6 +330,10 @@ public final class RtcPeerManager implements AutoCloseable {
         LowLatencyRtcEngine old = engines.put(peer, engine);
         if (old != null) old.close();
         return engine;
+    }
+
+    private boolean isCurrentSession(String peer, String sessionId) {
+        return sessionId != null && sessionId.equals(sessionIds.get(peer));
     }
 
     private void send(DeviceSession session, String type, JSONObject payload) {
