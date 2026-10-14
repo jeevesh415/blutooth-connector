@@ -372,24 +372,27 @@ public final class RtcPeerManager implements AutoCloseable {
     }
 
     public void stop(String peerAddress) {
-        LowLatencyRtcEngine engine = engines.remove(peerAddress);
-        if (engine != null) {
-            engine.close();
-            lastRemoteVideos.remove(peerAddress);
-        }
+        // Invalidate callback routing before closing native resources. WebRTC
+        // may synchronously emit CLOSED while close() is running.
         sessionIds.remove(peerAddress);
         inboundControl.remove(peerAddress);
         outboundControl.remove(peerAddress);
+        lastRemoteVideos.remove(peerAddress);
+        LowLatencyRtcEngine engine = engines.remove(peerAddress);
+        if (engine != null) {
+            engine.close();
+        }
     }
 
     @Override public void close() {
+        // Invalidate every session first so late native callbacks are ignored.
+        sessionIds.clear();
+        inboundControl.clear();
+        outboundControl.clear();
+        lastRemoteVideos.clear();
         for (LowLatencyRtcEngine engine : engines.values()) {
             engine.close();
         }
         engines.clear();
-        lastRemoteVideos.clear();
-        inboundControl.clear();
-        outboundControl.clear();
-        sessionIds.clear();
     }
 }
