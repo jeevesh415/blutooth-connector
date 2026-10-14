@@ -257,8 +257,12 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     public synchronized void createControlChannel() {
         if (controlChannel != null) return;
         DataChannel.Init init = new DataChannel.Init();
-        init.ordered = false;
-        init.maxRetransmits = 1;
+        // ControlReplayGuard enforces strictly increasing sequence numbers.
+        // An unordered/partially reliable channel can reorder or drop taps and
+        // swipes, making that strict guard reject legitimate user actions.
+        // Keep command delivery ordered and reliable; latency-sensitive media
+        // remains on SRTP rather than this command channel.
+        init.ordered = true;
         controlChannel = peer.createDataChannel("control", init);
         controlChannel.registerObserver(controlObserver());
         listener.onState("control-channel:" + controlChannel.state());
