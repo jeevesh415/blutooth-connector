@@ -184,6 +184,8 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
                 });
 
         if (peer == null) {
+            factory.dispose();
+            eglBase.release();
             throw new IllegalStateException("Unable to create WebRTC peer connection");
         }
     }
@@ -279,22 +281,26 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
         }
 
         if (controlChannel == null
-                || controlChannel.state() != DataChannel.State.OPEN) {
-            if (pendingControl.size() >= MAX_PENDING_CONTROL) {
-                pendingControl.removeFirst();
-            }
-            pendingControl.addLast(message);
+                || controlChannel.state() != DataChannel.State.OPEN
+                || !pendingControl.isEmpty()) {
+            enqueuePendingControl(message);
+            flushPendingControl();
             return;
         }
 
         if (!controlChannel.send(
                 new DataChannel.Buffer(
                         java.nio.ByteBuffer.wrap(bytes), false))) {
-            if (pendingControl.size() >= MAX_PENDING_CONTROL) {
-                pendingControl.removeFirst();
-            }
-            pendingControl.addLast(message);
+            enqueuePendingControl(message);
         }
+    }
+
+    private void enqueuePendingControl(String message) {
+        if (pendingControl.size() >= MAX_PENDING_CONTROL) {
+            throw new IllegalStateException(
+                    "RTC control queue is full; command was not queued");
+        }
+        pendingControl.addLast(message);
     }
 
     private synchronized void flushPendingControl() {
