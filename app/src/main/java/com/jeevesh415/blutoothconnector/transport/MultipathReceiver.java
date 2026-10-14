@@ -574,15 +574,17 @@ public final class MultipathReceiver {
             }
 
             int bitmapLength = in.readInt();
+            int maximumBitmapBytes = (chunkCount + 7) / 8;
             if (bitmapLength < 0
-                    || bitmapLength > ((chunkCount + 7) / 8) + 1024) {
+                    || bitmapLength > maximumBitmapBytes) {
                 throw new java.io.IOException(
-                        "Invalid transfer bitmap");
+                        "Invalid transfer bitmap length");
             }
 
             byte[] bitmap = new byte[bitmapLength];
             in.readFully(bitmap);
-            state.complete.or(BitSet.valueOf(bitmap));
+            BitSet restored = decodeCompletionBitmap(bitmap, chunkCount);
+            state.complete.or(restored);
 
             if (part.exists() && part.length() > fileSize) {
                 throw new java.io.IOException(
@@ -601,6 +603,29 @@ public final class MultipathReceiver {
             state.complete.clear();
             return state;
         }
+    }
+
+    /**
+     * Decodes persisted chunk-completion bits without accepting bits beyond
+     * the declared chunk count. Metadata is local, but can be truncated or
+     * corrupted by process death, storage faults, or manual file changes.
+     */
+    static BitSet decodeCompletionBitmap(
+            byte[] bitmap, int chunkCount) throws java.io.IOException {
+        if (bitmap == null
+                || chunkCount < 1
+                || chunkCount > MAX_CHUNKS
+                || bitmap.length > (chunkCount + 7) / 8) {
+            throw new java.io.IOException(
+                    "Invalid transfer completion bitmap");
+        }
+
+        BitSet decoded = BitSet.valueOf(bitmap);
+        if (decoded.length() > chunkCount) {
+            throw new java.io.IOException(
+                    "Completion bitmap sets an out-of-range chunk");
+        }
+        return decoded;
     }
 
     private static void persistState(State state)
