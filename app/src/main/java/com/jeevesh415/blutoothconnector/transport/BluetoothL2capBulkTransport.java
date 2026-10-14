@@ -57,7 +57,7 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
     public static final String TRANSPORT = "bluetooth-le-l2cap";
     private static final int MAGIC = 0x424C5434; // BLT4
-    private static final int VERSION = 1;
+    private static final int VERSION = 2;
     private static final int CHUNK_BYTES = 512 * 1024;
     private static final int MAX_NAME_BYTES = 512;
     private static final int MAX_ID_BYTES = 64;
@@ -243,6 +243,22 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
 
             validateTransferMetadata(fileSize, chunkSize, chunkCount);
 
+            byte[] headerAuthorization = new byte[MultipathCrypto.HASH_BYTES];
+            in.readFully(headerAuthorization);
+            if (!MultipathCrypto.verifyTransferHeaderTag(
+                    token,
+                    headerAuthorization,
+                    transferId,
+                    fileSize,
+                    chunkSize,
+                    chunkCount,
+                    expectedHash,
+                    name)) {
+                throw new SecurityException(
+                        "Bluetooth transfer header authorization failed");
+            }
+            java.util.Arrays.fill(headerAuthorization, (byte) 0);
+
             File destination = safeDestination(directory, name);
             File candidatePartial = new File(
                     destination.getParentFile(),
@@ -423,6 +439,16 @@ public final class BluetoothL2capBulkTransport implements AutoCloseable {
             out.writeInt(chunkCount);
             out.write(hash);
             writeString(out, name, MAX_NAME_BYTES);
+            byte[] headerAuthorization = MultipathCrypto.transferHeaderTag(
+                    token,
+                    transferId,
+                    sourceSize,
+                    chunkSize,
+                    chunkCount,
+                    hash,
+                    name);
+            out.write(headerAuthorization);
+            java.util.Arrays.fill(headerAuthorization, (byte) 0);
             out.flush();
 
             byte[] plaintext = new byte[chunkSize];
