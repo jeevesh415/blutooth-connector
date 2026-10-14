@@ -91,10 +91,16 @@ public final class TcpBulkEndpoint implements AutoCloseable {
                 new byte[BulkTransferProtocol.TOKEN_BYTES];
         random.nextBytes(token);
 
-        server = new ServerSocket();
-        server.setReuseAddress(true);
-        server.bind(
-                new java.net.InetSocketAddress(0));
+        try {
+            server = new ServerSocket();
+            server.setReuseAddress(true);
+            server.bind(new java.net.InetSocketAddress(0));
+        } catch (Exception startupError) {
+            // A partially initialized server must not leak a bound socket,
+            // retain a token, or make the next start() look successful.
+            close();
+            throw startupError;
+        }
 
         try {
             acceptExecutor.execute(() -> {
