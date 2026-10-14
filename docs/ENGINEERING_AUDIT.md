@@ -60,6 +60,10 @@ The multipath receiver now tracks in-flight chunk handlers separately from resum
 
 The LE L2CAP receiver now requires the declared chunk count to equal the exact ceiling of file size divided by chunk size, validates transfer IDs before constructing paths, atomically reserves a partial file under a shared storage lock, rejects duplicate in-progress IDs, and uses atomic replacement (with a safe fallback) to preserve an existing destination if promotion fails. Unit coverage was added for valid/invalid L2CAP chunk geometry.
 
+### Persisted partial-transfer metadata — follow-up finding
+
+A deeper corruption-path review found that the TCP multipath receiver previously allowed a completion bitmap up to 1,024 bytes larger than the maximum implied by the declared chunk count. Since a Java `BitSet` accepts all bits in that byte array, malformed metadata could mark nonexistent chunks complete. In the worst case, the cardinality could equal the declared chunk count while a real chunk remained absent, causing the receiver to attempt final hashing/promotion prematurely. The metadata loader now requires the bitmap byte length to fit the chunk geometry and rejects any set bit at or beyond `chunkCount`. Invalid metadata is discarded and the transfer resumes from an empty completion bitmap. Regression tests cover valid restoration, excessive byte length, out-of-range bits, null data, and invalid chunk counts.
+
 ### Media and alternate transports
 
 `LowLatencyRtcEngine` and `RtcPeerManager` provide WebRTC screen/microphone media and unordered control DataChannel handling. MediaProjection and microphone permissions remain explicit. `WifiDirectPathManager` and `WifiAwarePathManager` expose optional local-network paths and clean up sessions/receivers. Android capability/version checks gate these paths at runtime.
