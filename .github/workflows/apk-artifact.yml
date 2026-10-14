@@ -46,6 +46,57 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon testDebugUnitTest
 
+      - name: Guard against a blank launcher
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+
+          source = Path("app/src/main/java/com/jeevesh415/blutoothconnector/MainActivity.java").read_text()
+          assert "scroll.addView(root, new android.widget.ScrollView.LayoutParams(" in source, (
+              "Launcher UI content must be attached as the ScrollView's direct child."
+          )
+          assert "setContentView(shell);" in source, "Launcher shell must be installed as the Activity content view."
+          print("Launcher UI attachment check passed.")
+          PY
+
+      - name: Build debug APK for the current commit
+        env:
+          ANDROID_VERSION_NAME: 0.8.0-debug+${{ github.run_number }}
+        run: gradle --no-daemon assembleDebug
+
+      - name: Prepare and verify debug test artifact
+        shell: bash
+        run: |
+          set -euo pipefail
+          cp app/build/outputs/apk/debug/app-debug.apk blutooth-connector-debug.apk
+          BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector-debug.apk)"
+          printf '%s\\n' "$BADGING" | grep -q "package: name='com.jeevesh415.blutoothconnector'"
+          printf '%s\\n' "$BADGING" | grep -q "sdkVersion:'29'"
+          printf '%s\\n' "$BADGING" | grep -q "versionName='0.8.0-debug+${GITHUB_RUN_NUMBER}'"
+          sha256sum blutooth-connector-debug.apk | tee blutooth-connector-debug.apk.sha256
+          cat > blutooth-connector-build-info.txt <<EOF
+          commit=${GITHUB_SHA}
+          workflow_run=${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          version_name=0.8.0-debug+${GITHUB_RUN_NUMBER}
+          package=com.jeevesh415.blutoothconnector
+          signing=debug
+          warning=Test artifact only. It is not signed with the persistent release key and may not update an installed APK.
+          EOF
+
+      - name: Upload debug test artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: blutooth-connector-debug-${{ github.run_number }}
+          path: |
+            blutooth-connector-debug.apk
+            blutooth-connector-debug.apk.sha256
+            blutooth-connector-build-info.txt
+          if-no-files-found: error
+          retention-days: 30
+
+
       - name: Check release signing secrets
         id: signing
         env:
