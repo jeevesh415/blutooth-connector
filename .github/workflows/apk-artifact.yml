@@ -72,9 +72,9 @@ jobs:
           set -euo pipefail
           cp app/build/outputs/apk/debug/app-debug.apk blutooth-connector-debug.apk
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector-debug.apk)"
-          printf '%s\\n' "$BADGING" | grep -q "package: name='com.jeevesh415.blutoothconnector'"
-          printf '%s\\n' "$BADGING" | grep -q "sdkVersion:'29'"
-          printf '%s\\n' "$BADGING" | grep -q "versionName='0.8.0-debug+${GITHUB_RUN_NUMBER}'"
+          printf '%s\n' "$BADGING" | grep -q "package: name='com.jeevesh415.blutoothconnector'"
+          printf '%s\n' "$BADGING" | grep -q "sdkVersion:'29'"
+          printf '%s\n' "$BADGING" | grep -q "versionName='0.8.0-debug+${GITHUB_RUN_NUMBER}'"
           sha256sum blutooth-connector-debug.apk | tee blutooth-connector-debug.apk.sha256
           cat > blutooth-connector-build-info.txt <<EOF
           commit=${GITHUB_SHA}
