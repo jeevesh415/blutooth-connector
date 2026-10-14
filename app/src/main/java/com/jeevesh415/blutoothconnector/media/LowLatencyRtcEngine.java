@@ -192,7 +192,11 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
 
     private DataChannel.Observer controlObserver() {
         return new DataChannel.Observer() {
-            @Override public void onBufferedAmountChange(long amount) {}
+            @Override public void onBufferedAmountChange(long amount) {
+                // A prior send may have been rejected because the native
+                // DataChannel buffer was full. Retry queued commands when it drains.
+                flushPendingControl();
+            }
 
             @Override public void onStateChange() {
                 flushPendingControl();
