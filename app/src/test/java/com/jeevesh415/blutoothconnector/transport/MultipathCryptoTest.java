@@ -51,6 +51,32 @@ public final class MultipathCryptoTest {
         assertArrayEquals(plaintext, recovered);
     }
 
+    @Test public void transferHeaderAuthorizationBindsAllAllocationMetadata() throws Exception {
+        byte[] token = new byte[MultipathCrypto.TOKEN_BYTES];
+        byte[] hash = new byte[MultipathCrypto.HASH_BYTES];
+        Arrays.fill(token, (byte) 0x31);
+        Arrays.fill(hash, (byte) 0x5a);
+
+        byte[] tag = MultipathCrypto.transferHeaderTag(
+                token, "transfer-header-1", 1024L * 1024L,
+                512 * 1024, 2, hash, "payload.bin");
+
+        assertTrue(MultipathCrypto.verifyTransferHeaderTag(
+                token, tag, "transfer-header-1", 1024L * 1024L,
+                512 * 1024, 2, hash, "payload.bin"));
+        assertFalse(MultipathCrypto.verifyTransferHeaderTag(
+                token, tag, "transfer-header-1", 8L * 1024L * 1024L,
+                512 * 1024, 16, hash, "payload.bin"));
+        assertFalse(MultipathCrypto.verifyTransferHeaderTag(
+                token, tag, "transfer-header-1", 1024L * 1024L,
+                512 * 1024, 2, hash, "other.bin"));
+
+        tag[0] ^= 1;
+        assertFalse(MultipathCrypto.verifyTransferHeaderTag(
+                token, tag, "transfer-header-1", 1024L * 1024L,
+                512 * 1024, 2, hash, "payload.bin"));
+    }
+
     @Test public void chunkNoncesAreDeterministicAndDistinct() throws Exception {
         byte[] first = MultipathCrypto.deterministicIv("transfer-1", 0);
         byte[] retry = MultipathCrypto.deterministicIv("transfer-1", 0);
