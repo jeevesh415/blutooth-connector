@@ -528,6 +528,7 @@ public final class MultipathReceiver {
 
         File metadata = metadataFile(part);
         if (!metadata.isFile()) {
+            normalizePartialFile(part, fileSize);
             return state;
         }
 
@@ -586,10 +587,7 @@ public final class MultipathReceiver {
             BitSet restored = decodeCompletionBitmap(bitmap, chunkCount);
             state.complete.or(restored);
 
-            if (part.exists() && part.length() > fileSize) {
-                throw new java.io.IOException(
-                        "Partial file exceeds declared size");
-            }
+            normalizePartialFile(part, fileSize);
 
             state.lastTouchedMs =
                     Math.max(
@@ -597,11 +595,40 @@ public final class MultipathReceiver {
                             metadata.lastModified());
             return state;
         } catch (Exception error) {
-            // Corrupt metadata must never cause acceptance of stale
-            // completion state. Start safely from an empty bitmap.
-            try { metadata.delete(); } catch (Exception ignored) {}
+            // Corrupt metadata means its completion bitmap cannot be trusted.
+            // Reset both metadata and partial bytes so stale/corrupt chunks
+            // cannot survive while the receiver starts with an empty bitmap.
             state.complete.clear();
+            try {
+                Files.deleteIfExists(metadata.toPath());
+                if (part.exists()) {
+                    try (RandomAccessFile raf =
+                                 new RandomAccessFile(part, "rw")) {
+                        raf.setLength(0L);
+                    }
+                }
+            } catch (Exception resetError) {
+                throw new java.io.IOException(
+                        "Cannot reset corrupt partial transfer state",
+                        resetError);
+            }
             return state;
+        }
+    }
+
+    static void normalizePartialFile(File part, long fileSize)
+            throws java.io.IOException {
+        if (fileSize <= 0 || fileSize > MAX_TRANSFER_BYTES) {
+            throw new java.io.IOException("Invalid partial file size");
+        }
+        if (!part.exists()) return;
+        if (!part.isFile()) {
+            throw new java.io.IOException("Partial transfer path is not a file");
+        }
+        if (part.length() > fileSize) {
+            try (RandomAccessFile raf = new RandomAccessFile(part, "rw")) {
+                raf.setLength(fileSize);
+            }
         }
     }
 
