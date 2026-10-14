@@ -73,12 +73,15 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     private static final int MAX_SDP_BYTES = 256 * 1024;
     private static final int MAX_ICE_CANDIDATE_BYTES = 8192;
 
-    public static void initialize(Context context) {
-        if (!INITIALIZED.compareAndSet(false, true)) return;
+    public static synchronized void initialize(Context context) {
+        if (INITIALIZED.get()) return;
         PeerConnectionFactory.initialize(
                 PeerConnectionFactory.InitializationOptions.builder(context)
                         .setEnableInternalTracer(false)
                         .createInitializationOptions());
+        // Publish success only after the native initialization call returns.
+        // Otherwise one transient initialization failure permanently blocks retry.
+        INITIALIZED.set(true);
     }
 
     public LowLatencyRtcEngine(Context context, Listener listener) {
