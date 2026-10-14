@@ -57,6 +57,63 @@ public final class MultipathCrypto {
         return MessageDigest.isEqual(expected, supplied);
     }
 
+    /**
+     * Authenticates the complete L2CAP transfer header before the receiver
+     * allocates storage based on peer-controlled size fields.
+     */
+    public static byte[] transferHeaderTag(
+            byte[] token,
+            String transferId,
+            long fileSize,
+            int chunkSize,
+            int chunkCount,
+            byte[] fileHash,
+            String fileName) throws Exception {
+        validateSecret(token);
+        if (transferId == null || transferId.isEmpty()
+                || transferId.getBytes(StandardCharsets.UTF_8).length > 64
+                || fileSize < 1 || chunkSize < 1 || chunkCount < 1
+                || fileHash == null || fileHash.length != HASH_BYTES
+                || fileName == null || fileName.isEmpty()
+                || fileName.getBytes(StandardCharsets.UTF_8).length > 512) {
+            throw new IllegalArgumentException("Invalid transfer header");
+        }
+
+        ByteArrayOutputStream bytes = new ByteArrayOutputStream(128);
+        DataOutputStream out = new DataOutputStream(bytes);
+        out.writeUTF("BCL-L2CAP-HEADER-1");
+        byte[] id = transferId.getBytes(StandardCharsets.UTF_8);
+        byte[] name = fileName.getBytes(StandardCharsets.UTF_8);
+        out.writeInt(id.length);
+        out.write(id);
+        out.writeLong(fileSize);
+        out.writeInt(chunkSize);
+        out.writeInt(chunkCount);
+        out.write(fileHash);
+        out.writeInt(name.length);
+        out.write(name);
+        out.flush();
+
+        Mac mac = Mac.getInstance("HmacSHA256");
+        mac.init(new SecretKeySpec(token, "HmacSHA256"));
+        return mac.doFinal(bytes.toByteArray());
+    }
+
+    public static boolean verifyTransferHeaderTag(
+            byte[] token,
+            byte[] supplied,
+            String transferId,
+            long fileSize,
+            int chunkSize,
+            int chunkCount,
+            byte[] fileHash,
+            String fileName) throws Exception {
+        if (supplied == null || supplied.length != HASH_BYTES) return false;
+        byte[] expected = transferHeaderTag(
+                token, transferId, fileSize, chunkSize, chunkCount, fileHash, fileName);
+        return MessageDigest.isEqual(expected, supplied);
+    }
+
     public static byte[] encrypt(
             byte[] token,
             String transferId,
