@@ -124,8 +124,17 @@ public final class ConnectionService extends Service {
         if (peers == null) {
             throw new IllegalStateException("Connection service not ready");
         }
+        if (resultCode != android.app.Activity.RESULT_OK) {
+            throw new SecurityException(
+                    "Screen capture consent was not granted");
+        }
         if (projectionData == null) {
             throw new IllegalArgumentException("projectionData");
+        }
+        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            throw new SecurityException(
+                    "Microphone permission is required for screen-share publishing");
         }
 
         DeviceSession target = peers.session(peerAddress);
