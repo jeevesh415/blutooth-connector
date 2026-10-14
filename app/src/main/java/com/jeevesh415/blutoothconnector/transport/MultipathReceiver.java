@@ -87,8 +87,6 @@ public final class MultipathReceiver {
             throw new java.io.IOException("Cannot create transfer directory");
         }
 
-        cleanupStaleStates(directory);
-
         if (in.readInt() != MAGIC) {
             throw new java.io.IOException("Bad BCL3 magic");
         }
@@ -195,6 +193,11 @@ public final class MultipathReceiver {
             throw new SecurityException(
                     "Invalid BCL3 authorization proof");
         }
+
+        // Perform directory-wide recovery work only after the peer proves
+        // possession of the transfer token. Otherwise unauthenticated sockets
+        // can force repeated scans and stale-partial cleanup.
+        cleanupStaleStates(directory);
 
         long ciphertextLengthLong =
                 length + MultipathCrypto.GCM_TAG_BYTES;
