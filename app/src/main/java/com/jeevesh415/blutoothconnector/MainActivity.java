@@ -299,6 +299,12 @@ public final class MainActivity extends Activity {
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(32, 44, 32, 44);
 
+        // A ScrollView renders only its direct child. Without this attachment,
+        // the controls are built off-screen and the launcher appears completely blank.
+        scroll.addView(root, new android.widget.ScrollView.LayoutParams(
+                LinearLayout.LayoutParams.MATCH_PARENT,
+                LinearLayout.LayoutParams.WRAP_CONTENT));
+
         TextView eyebrow = new TextView(this);
         eyebrow.setText("BLUTOOTH CONNECTOR  •  CONTROL CENTER");
         eyebrow.setTextSize(12);
