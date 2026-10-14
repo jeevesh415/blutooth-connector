@@ -71,10 +71,10 @@ public final class TcpBulkEndpoint implements AutoCloseable {
                     new ThreadPoolExecutor.AbortPolicy());
     private final SecureRandom random = new SecureRandom();
 
-    private ServerSocket server;
-    private File directory;
-    private byte[] token;
-    private Listener listener;
+    private volatile ServerSocket server;
+    private volatile File directory;
+    private volatile byte[] token;
+    private volatile Listener listener;
 
     public synchronized void start(
             File directory,
@@ -320,6 +320,10 @@ public final class TcpBulkEndpoint implements AutoCloseable {
 
         acceptExecutor.shutdownNow();
         transferExecutor.shutdownNow();
+        byte[] oldToken = token;
         token = null;
+        if (oldToken != null) {
+            java.util.Arrays.fill(oldToken, (byte) 0);
+        }
     }
 }
