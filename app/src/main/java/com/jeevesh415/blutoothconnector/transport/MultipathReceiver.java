@@ -326,7 +326,12 @@ public final class MultipathReceiver {
                                     state.part);
                     if (!MessageDigest.isEqual(
                             actual, state.hash)) {
-                        state.complete.clear(chunkIndex);
+                        // Never persist a completion bitmap that claims a
+                        // corrupted partial file is complete. Invalidate the
+                        // old bitmap before resetting bytes, so a crash during
+                        // recovery can only cause a full resend, not data loss.
+                        resetAfterIntegrityFailure(state.part, state.complete);
+                        persistState(state);
                         writeResponse(out, 6, length);
                         throw new java.io.IOException(
                                 "Final SHA-256 integrity check failed");
@@ -653,6 +658,21 @@ public final class MultipathReceiver {
                     "Completion bitmap sets an out-of-range chunk");
         }
         return decoded;
+    }
+
+    static void resetAfterIntegrityFailure(
+            File part, BitSet complete) throws java.io.IOException {
+        if (part == null || complete == null) {
+            throw new IllegalArgumentException("part and completion bitmap are required");
+        }
+        File metadata = metadataFile(part);
+        // Delete durable completion claims first. If a crash occurs after this
+        // point, the next attempt starts from an empty bitmap and resends all chunks.
+        Files.deleteIfExists(metadata.toPath());
+        try (RandomAccessFile raf = new RandomAccessFile(part, "rw")) {
+            raf.setLength(0L);
+        }
+        complete.clear();
     }
 
     private static void persistState(State state)
