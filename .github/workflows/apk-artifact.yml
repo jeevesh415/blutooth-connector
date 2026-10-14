@@ -64,25 +64,25 @@ jobs:
           fi
 
       - name: Decode release signing key
-                env:
+        env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
         run: |
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
           test -s "$RUNNER_TEMP/release.keystore"
 
       - name: Build signed release APK
-                env:
+        env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
           ANDROID_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) \
-          ANDROID_VERSION_NAME="0.8.0+${GITHUB_RUN_NUMBER}" \
+          ANDROID_VERSION_NAME="0.8.0+\${GITHUB_RUN_NUMBER}" \
           gradle --no-daemon assembleRelease
 
       - name: Prepare release APK
-                run: |
+        run: |
           set -euo pipefail
           cp app/build/outputs/apk/release/app-release.apk blutooth-connector.apk
           BADGING="$("$ANDROID_HOME/build-tools/36.0.0/aapt" dump badging blutooth-connector.apk)"
@@ -94,7 +94,7 @@ jobs:
           sha256sum blutooth-connector.apk | tee blutooth-connector.apk.sha256
 
       - name: Verify signing certificate continuity
-                env:
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -121,7 +121,7 @@ jobs:
           fi
 
       - name: Publish latest APK release
-                env:
+        env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -144,7 +144,7 @@ jobs:
           cmp blutooth-connector.apk /tmp/apk-verify/blutooth-connector.apk
 
       - name: Upload CI artifact
-                uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4
         with:
           name: blutooth-connector-apk
           path: |
