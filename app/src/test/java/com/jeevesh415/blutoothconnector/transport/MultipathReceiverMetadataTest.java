@@ -9,6 +9,7 @@ import java.nio.file.Files;
 import java.util.BitSet;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertFalse;
 import static org.junit.Assert.fail;
 
 public final class MultipathReceiverMetadataTest {
@@ -57,6 +58,32 @@ public final class MultipathReceiverMetadataTest {
         assertEquals(16L, part.length());
 
         Files.deleteIfExists(part.toPath());
+        Files.deleteIfExists(directory.toPath());
+    }
+
+    @Test
+    public void integrityResetClearsDurableBitmapAndPartialBytes() throws Exception {
+        File directory = Files.createTempDirectory("bcl-integrity-reset").toFile();
+        File part = new File(directory, "sample.part");
+        File metadata = new File(part.getPath() + ".meta");
+        try (FileOutputStream out = new FileOutputStream(part)) {
+            out.write(new byte[] {1, 2, 3, 4, 5, 6});
+        }
+        try (FileOutputStream out = new FileOutputStream(metadata)) {
+            out.write(new byte[] {9, 8, 7});
+        }
+        BitSet complete = new BitSet();
+        complete.set(0, 3);
+
+        MultipathReceiver.resetAfterIntegrityFailure(part, complete);
+
+        assertEquals(0L, part.length());
+        assertEquals(0, complete.cardinality());
+        assertFalse("Persisted completion metadata must be invalidated first",
+                metadata.exists());
+
+        Files.deleteIfExists(part.toPath());
+        Files.deleteIfExists(metadata.toPath());
         Files.deleteIfExists(directory.toPath());
     }
 
