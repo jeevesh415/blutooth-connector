@@ -192,7 +192,7 @@ The current controller includes a file-picker workflow and sends staged files to
 
 ## Low-latency control behavior
 
-RTC control uses an unordered DataChannel with a one-retransmission budget. Commands generated while ICE/DataChannel negotiation is incomplete are held in a small bounded queue and flushed when the channel opens; the protocol's session ID and monotonic sequence guard still reject stale or replayed commands. This reduces UI stalls without claiming zero latency.
+RTC control uses an ordered, reliable DataChannel because tap/swipe commands must preserve sequence order for the strict replay guard. Commands generated while ICE/DataChannel negotiation is incomplete are held in a small bounded queue and flushed when the channel opens. WebRTC ICE candidates are buffered until their related SDP description has been signaled/applied, preventing the candidate-before-offer/answer race. The media stream remains on WebRTC SRTP, separate from this command channel.
 
 ## Adaptive multipath data plane
 
