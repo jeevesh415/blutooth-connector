@@ -45,12 +45,14 @@ jobs:
       - name: Unit tests
         run: gradle --no-daemon testDebugUnitTest
 
-      - name: Require release signing secrets
+      - name: Check release signing secrets
+        id: signing
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        shell: bash
         run: |
           set -euo pipefail
           missing=()
@@ -59,29 +61,36 @@ jobs:
           [[ -n "$ANDROID_KEY_ALIAS" ]] || missing+=("ANDROID_KEY_ALIAS")
           [[ -n "$ANDROID_KEY_PASSWORD" ]] || missing+=("ANDROID_KEY_PASSWORD")
           if (( ${#missing[@]} > 0 )); then
-            printf '::error::Cannot publish update-safe APK. Missing repository Actions secrets: %s\n' "${missing[*]}"
-            exit 1
+            echo "configured=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::Release publication skipped; configure repository Actions secrets: ${missing[*]}"
+          else
+            echo "configured=true" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Decode release signing key
+        if: steps.signing.outputs.configured == 'true'
         env:
           ANDROID_KEYSTORE_B64: ${{ secrets.ANDROID_KEYSTORE_B64 }}
         run: |
+          set -euo pipefail
           printf '%s' "$ANDROID_KEYSTORE_B64" | base64 --decode > "$RUNNER_TEMP/release.keystore"
           test -s "$RUNNER_TEMP/release.keystore"
 
       - name: Build signed release APK
+        if: steps.signing.outputs.configured == 'true'
         env:
           ANDROID_KEYSTORE_PATH: ${{ runner.temp }}/release.keystore
           ANDROID_KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
           ANDROID_KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
           ANDROID_KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
         run: |
+          set -euo pipefail
           ANDROID_VERSION_CODE=$((1000 + GITHUB_RUN_NUMBER)) \
           ANDROID_VERSION_NAME="0.8.0+${GITHUB_RUN_NUMBER}" \
           gradle --no-daemon assembleRelease
 
       - name: Prepare release APK
+        if: steps.signing.outputs.configured == 'true'
         run: |
           set -euo pipefail
           cp app/build/outputs/apk/release/app-release.apk blutooth-connector.apk
@@ -94,6 +103,7 @@ jobs:
           sha256sum blutooth-connector.apk | tee blutooth-connector.apk.sha256
 
       - name: Verify signing certificate continuity
+        if: steps.signing.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -120,16 +130,14 @@ jobs:
             fi
           fi
 
-      - name: Publish latest APK release
+      - name: Publish and verify signed APK
+        if: steps.signing.outputs.configured == 'true'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           if gh release view latest >/dev/null 2>&1; then
             gh release upload latest blutooth-connector.apk blutooth-connector.apk.sha256 --clobber
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" -f sha="${GITHUB_SHA}" -F force=true
-            RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/latest" --jq '.id')"
-            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f target_commitish="${GITHUB_SHA}"
           else
             gh release create latest blutooth-connector.apk blutooth-connector.apk.sha256 \
               --target "${GITHUB_SHA}" \
@@ -143,7 +151,25 @@ jobs:
           test -s /tmp/apk-verify/blutooth-connector.apk
           cmp blutooth-connector.apk /tmp/apk-verify/blutooth-connector.apk
 
+          # Only move the floating latest tag after the exact uploaded bytes
+          # have been downloaded and verified.
+          if gh release view latest >/dev/null 2>&1; then
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/git/refs/tags/latest" -f sha="${GITHUB_SHA}" -F force=true
+            RELEASE_ID="$(gh api "repos/${GITHUB_REPOSITORY}/releases/tags/latest" --jq '.id')"
+            gh api --method PATCH "repos/${GITHUB_REPOSITORY}/releases/${RELEASE_ID}" -f target_commitish="${GITHUB_SHA}"
+          fi
+
+          # Remove the legacy ephemeral-debug assets only after the signed
+          # replacement has been verified, so users cannot pick the wrong APK.
+          ASSET_NAMES="$(gh release view latest --json assets --jq '.assets[].name')"
+          for legacy_asset in blutooth-connector-debug.apk blutooth-connector-debug.apk.sha256; do
+            if printf '%s\n' "$ASSET_NAMES" | grep -Fxq "$legacy_asset"; then
+              gh release delete-asset latest "$legacy_asset" --yes
+            fi
+          done
+
       - name: Upload CI artifact
+        if: steps.signing.outputs.configured == 'true'
         uses: actions/upload-artifact@v4
         with:
           name: blutooth-connector-apk
