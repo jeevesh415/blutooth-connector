@@ -66,6 +66,12 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     private DataChannel controlChannel;
     private final ArrayDeque<String> pendingControl = new ArrayDeque<>();
     private static final int MAX_PENDING_CONTROL = 32;
+    private final RtcIceCandidateBuffer pendingLocalIce = new RtcIceCandidateBuffer();
+    private final RtcIceCandidateBuffer pendingRemoteIce = new RtcIceCandidateBuffer();
+    private boolean localDescriptionSignaled;
+    private boolean remoteDescriptionApplied;
+    private static final int MAX_SDP_BYTES = 256 * 1024;
+    private static final int MAX_ICE_CANDIDATE_BYTES = 8192;
 
     public static void initialize(Context context) {
         if (!INITIALIZED.compareAndSet(false, true)) return;
@@ -109,7 +115,19 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
                 configuration,
                 new PeerConnection.Observer() {
                     @Override public void onIceCandidate(IceCandidate candidate) {
-                        listener.onIceCandidate(candidate);
+                        synchronized (LowLatencyRtcEngine.this) {
+                            if (closed.get()) return;
+                            if (!localDescriptionSignaled) {
+                                try {
+                                    pendingLocalIce.offer(candidate);
+                                } catch (RuntimeException overflow) {
+                                    listener.onError(new IllegalStateException(
+                                            "Local ICE candidate buffer overflow", overflow));
+                                }
+                                return;
+                            }
+                        }
+                        emitLocalIceCandidate(candidate);
                     }
 
                     @Override public void onAddStream(MediaStream stream) {}
@@ -293,7 +311,8 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
             @Override public void onCreateSuccess(SessionDescription description) {
                 peer.setLocalDescription(new SdpObserverAdapter() {
                     @Override public void onSetSuccess() {
-                        listener.onLocalOffer(description.description);
+                        signalLocalDescription(
+                                () -> listener.onLocalOffer(description.description));
                     }
                     @Override public void onSetFailure(String error) {
                         listener.onError(new IllegalStateException(error));
@@ -307,13 +326,17 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     }
 
     public synchronized void acceptOffer(String sdp) {
+        validateSdp(sdp);
+        if (closed.get()) return;
         peer.setRemoteDescription(new SdpObserverAdapter() {
             @Override public void onSetSuccess() {
+                markRemoteDescriptionApplied();
                 peer.createAnswer(new SdpObserverAdapter() {
                     @Override public void onCreateSuccess(SessionDescription description) {
                         peer.setLocalDescription(new SdpObserverAdapter() {
                             @Override public void onSetSuccess() {
-                                listener.onLocalAnswer(description.description);
+                                signalLocalDescription(
+                                        () -> listener.onLocalAnswer(description.description));
                             }
                             @Override public void onSetFailure(String error) {
                                 listener.onError(new IllegalStateException(error));
@@ -332,8 +355,11 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     }
 
     public synchronized void acceptAnswer(String sdp) {
+        validateSdp(sdp);
+        if (closed.get()) return;
         peer.setRemoteDescription(new SdpObserverAdapter() {
             @Override public void onSetSuccess() {
+                markRemoteDescriptionApplied();
                 listener.onState("remote-answer-applied");
             }
             @Override public void onSetFailure(String error) {
@@ -343,7 +369,66 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
     }
 
     public synchronized void addIce(String sdpMid, int sdpMLineIndex, String candidate) {
-        peer.addIceCandidate(new IceCandidate(sdpMid, sdpMLineIndex, candidate));
+        if (closed.get()) return;
+        if (candidate == null
+                || candidate.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                        > MAX_ICE_CANDIDATE_BYTES) {
+            throw new IllegalArgumentException("Invalid or oversized ICE candidate");
+        }
+        IceCandidate value = new IceCandidate(sdpMid, sdpMLineIndex, candidate);
+        if (!remoteDescriptionApplied) {
+            pendingRemoteIce.offer(value);
+            return;
+        }
+        if (!peer.addIceCandidate(value)) {
+            listener.onError(new IllegalStateException("WebRTC rejected ICE candidate"));
+        }
+    }
+
+    private void signalLocalDescription(Runnable signalDescription) {
+        synchronized (this) {
+            if (closed.get()) return;
+            // The SDP must be sent before its trickle candidates on the ordered
+            // Bluetooth signaling stream, otherwise the remote end has no SID
+            // or peer connection yet when the candidate arrives.
+            signalDescription.run();
+            localDescriptionSignaled = true;
+            for (IceCandidate candidate : pendingLocalIce.drain()) {
+                emitLocalIceCandidate(candidate);
+            }
+        }
+    }
+
+    private void emitLocalIceCandidate(IceCandidate candidate) {
+        String value = candidate == null ? null : candidate.sdp;
+        if (value == null
+                || value.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                        > MAX_ICE_CANDIDATE_BYTES) {
+            listener.onError(new IllegalArgumentException("Invalid local ICE candidate"));
+            return;
+        }
+        listener.onIceCandidate(candidate);
+    }
+
+    private void markRemoteDescriptionApplied() {
+        synchronized (this) {
+            if (closed.get()) return;
+            remoteDescriptionApplied = true;
+            for (IceCandidate candidate : pendingRemoteIce.drain()) {
+                if (!peer.addIceCandidate(candidate)) {
+                    listener.onError(new IllegalStateException(
+                            "WebRTC rejected queued ICE candidate"));
+                }
+            }
+        }
+    }
+
+    private static void validateSdp(String sdp) {
+        if (sdp == null || sdp.isEmpty()
+                || sdp.getBytes(java.nio.charset.StandardCharsets.UTF_8).length
+                        > MAX_SDP_BYTES) {
+            throw new IllegalArgumentException("Missing or oversized SDP");
+        }
     }
 
     private synchronized void releaseScreenCaptureAfterProjectionStop() {
@@ -368,6 +453,8 @@ public final class LowLatencyRtcEngine implements AutoCloseable {
             if (screenCapturer != null) screenCapturer.stopCapture();
         } catch (Exception ignored) {}
         pendingControl.clear();
+        pendingLocalIce.clear();
+        pendingRemoteIce.clear();
         if (surfaceTextureHelper != null) surfaceTextureHelper.dispose();
         if (peer != null) peer.close();
         if (videoTrack != null) videoTrack.dispose();
