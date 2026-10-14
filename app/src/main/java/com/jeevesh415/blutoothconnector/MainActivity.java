@@ -292,12 +292,16 @@ public final class MainActivity extends Activity {
         final int textPrimary = android.graphics.Color.parseColor("#F4F8FF");
         final int textSecondary = android.graphics.Color.parseColor("#9DB0C8");
 
+        getWindow().setStatusBarColor(bg);
+        getWindow().setNavigationBarColor(bg);
+        getWindow().getDecorView().setSystemUiVisibility(0);
+
         android.widget.ScrollView scroll = new android.widget.ScrollView(this);
         scroll.setBackgroundColor(bg);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(32, 44, 32, 44);
+        root.setPadding(dp(24), dp(32), dp(24), dp(32));
 
         // A ScrollView renders only its direct child. Without this attachment,
         // the controls are built off-screen and the launcher appears completely blank.
@@ -317,14 +321,14 @@ public final class MainActivity extends Activity {
         title.setTextSize(30);
         title.setTypeface(null, android.graphics.Typeface.BOLD);
         title.setTextColor(textPrimary);
-        title.setPadding(0, 8, 0, 4);
+        title.setPadding(0, dp(8), 0, dp(4));
         root.addView(title);
 
         TextView subtitle = new TextView(this);
         subtitle.setText("Connect once. Manage the complete device session from one interface.");
         subtitle.setTextSize(14);
         subtitle.setTextColor(textSecondary);
-        subtitle.setPadding(0, 0, 0, 24);
+        subtitle.setPadding(0, 0, 0, dp(24));
         root.addView(subtitle);
 
         LinearLayout statusCard = card(panel);
@@ -338,7 +342,7 @@ public final class MainActivity extends Activity {
         status.setText("Waiting for connection service…");
         status.setTextSize(15);
         status.setTextColor(textPrimary);
-        status.setPadding(0, 8, 0, 0);
+        status.setPadding(0, dp(8), 0, 0);
         statusCard.addView(status);
         root.addView(statusCard);
 
@@ -393,7 +397,7 @@ public final class MainActivity extends Activity {
         footer.setText("All remote actions remain subject to Android authorization, Accessibility, MediaProjection and device-admin boundaries.");
         footer.setTextSize(11);
         footer.setTextColor(textSecondary);
-        footer.setPadding(4, 22, 4, 0);
+        footer.setPadding(dp(4), dp(22), dp(4), 0);
         root.addView(footer);
 
         android.widget.FrameLayout shell = new android.widget.FrameLayout(this);
@@ -413,24 +417,29 @@ public final class MainActivity extends Activity {
         sensorCorner.setOnClickListener(v -> openSensorControlPanel());
 
         android.widget.FrameLayout.LayoutParams sensorLp =
-                new android.widget.FrameLayout.LayoutParams(62, 62, Gravity.TOP | Gravity.END);
-        sensorLp.setMargins(0, 18, 18, 0);
+                new android.widget.FrameLayout.LayoutParams(dp(56), dp(56), Gravity.TOP | Gravity.END);
+        sensorLp.setMargins(0, dp(16), dp(16), 0);
         shell.addView(sensorCorner, sensorLp);
 
         setContentView(shell);
     }
 
+    private int dp(int value) {
+        return Math.round(value * getResources().getDisplayMetrics().density);
+    }
+
     private LinearLayout card(int color) {
         LinearLayout card = new LinearLayout(this);
         card.setOrientation(LinearLayout.VERTICAL);
-        card.setPadding(22, 18, 22, 18);
+        card.setPadding(dp(20), dp(16), dp(20), dp(16));
         android.graphics.drawable.GradientDrawable bg = new android.graphics.drawable.GradientDrawable();
         bg.setColor(color);
         bg.setCornerRadius(22f);
         card.setBackground(bg);
+        card.setElevation(dp(2));
         LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(
                 -1, -2);
-        lp.bottomMargin = 10;
+        lp.bottomMargin = dp(10);
         card.setLayoutParams(lp);
         return card;
     }
@@ -442,14 +451,15 @@ public final class MainActivity extends Activity {
         b.setTextColor(foreground);
         b.setAllCaps(false);
         b.setGravity(Gravity.CENTER_VERTICAL);
-        b.setPadding(20, 4, 20, 4);
+        b.setPadding(dp(18), dp(4), dp(18), dp(4));
         android.graphics.drawable.GradientDrawable bg =
                 new android.graphics.drawable.GradientDrawable();
         bg.setColor(background);
         bg.setCornerRadius(20f);
         b.setBackground(bg);
-        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, 58);
-        lp.bottomMargin = 10;
+        b.setElevation(dp(1));
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(-1, dp(56));
+        lp.bottomMargin = dp(8);
         b.setLayoutParams(lp);
         return b;
     }
@@ -465,7 +475,7 @@ public final class MainActivity extends Activity {
 
     private void addGap(LinearLayout root, int height) {
         android.view.View gap = new android.view.View(this);
-        root.addView(gap, new LinearLayout.LayoutParams(1, height));
+        root.addView(gap, new LinearLayout.LayoutParams(1, dp(height)));
     }
 
     private boolean hasBluetoothPermission() {
