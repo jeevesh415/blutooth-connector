@@ -68,6 +68,6 @@ android {
 }
 
 dependencies {
-    implementation("io.github.webrtc-sdk:android:150.7871.01")
+    implementation("io.github.webrtc-sdk:android:150.7871.04")
     testImplementation("junit:junit:4.13.2")
 }
