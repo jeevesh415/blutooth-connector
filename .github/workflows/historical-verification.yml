@@ -72,7 +72,7 @@ jobs:
 
       - name: Install Gradle
         if: steps.gradle.outputs.cmd == 'gradle --no-daemon'
-        uses: gradle/actions/setup-gradle@v4
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.6.0'
 
