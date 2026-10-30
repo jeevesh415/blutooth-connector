@@ -36,7 +36,7 @@ jobs:
         run: sdkmanager --channel=1 "platforms;android-36" "build-tools;36.0.0"
 
       - name: Install Gradle
-        uses: gradle/actions/setup-gradle@v6
+        uses: gradle/actions/setup-gradle@v5
         with:
           gradle-version: '9.7.1'
 
