@@ -316,6 +316,10 @@ public final class ConnectionService extends Service {
             peers.startReceiver();
         } catch (Exception ignored) {}
 
+        // Reconnect only peers previously enrolled through this app. Bluetooth
+        // pairing alone is not treated as app authorization.
+        peers.reconnectEnrolledPeers();
+
         registerNetworkTopologyMonitor();
     }
 
