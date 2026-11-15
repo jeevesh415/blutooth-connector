@@ -53,7 +53,9 @@ When Android exposes a matching Network object, the socket is created from that 
 
 The scheduler maintains short throughput/RTT histories and a Fourier-derived high-frequency instability term. Work is bounded to a small in-flight window so completed chunks can update the scheduler before later chunks are assigned.
 
-A path failure raises a failure estimate and immediately reduces its scheduling utility. Successful observations decay that penalty.
+A path failure raises a failure estimate and immediately reduces its scheduling utility. Successful finite observations decay that penalty; invalid NaN or infinite measurements are ignored rather than contaminating the scheduler state.
+
+Each scheduling pass now calculates one coherent metrics snapshot per path and reuses its utility for normalization and ordering. This avoids repeating the spectral calculation during sorting. The public read-only `snapshots()` API exposes, for each path, its estimated throughput, RTT, failure penalty, instability score, utility, sample counts, and current allocation fraction. This is intended for diagnostics and future benchmark/UI integration; it does not alter the BCL3 wire format.
 
 The scheduling mathematics changes allocation decisions; it does not create bandwidth that the radio, chipset, AP, or operating system does not expose.
 
@@ -100,5 +102,7 @@ For bulk:
 - path failure rate;
 - final integrity failures;
 - energy per MB.
+
+The scheduler diagnostics API provides the per-path estimates and allocation snapshot needed to correlate transfer observations with path selection. These are estimates from recent runtime samples, not hardware benchmark results.
 
 The repository includes JVM coverage for framing, scheduler behavior, BCL request encoding, BCL3 cryptography/tamper detection, and a two-path loopback reconstruction test.
