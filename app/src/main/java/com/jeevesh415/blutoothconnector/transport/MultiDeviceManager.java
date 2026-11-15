@@ -16,6 +16,9 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.Collections;
+import java.util.HashSet;
+import java.util.Set;
+import java.util.TreeSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
@@ -47,6 +50,10 @@ public final class MultiDeviceManager implements AutoCloseable {
         void onError(DeviceSession session, Exception error);
     }
 
+    private static final String ENROLLMENT_PREFS = "multi_device_enrollment";
+    private static final String ENROLLED_PEERS = "peer_addresses";
+
+    private final BluetoothAdapter adapter;
     private final BluetoothTransport transport;
     private final BluetoothCapabilityProfile bluetoothCapabilities;
     private final Context bulkContext;
@@ -75,6 +82,7 @@ public final class MultiDeviceManager implements AutoCloseable {
 
     public MultiDeviceManager(Context context, BluetoothAdapter adapter, Listener listener) {
         if (adapter == null) throw new IllegalArgumentException("Bluetooth adapter");
+        this.adapter = adapter;
         this.bluetoothCapabilities = BluetoothCapabilityProfile.fromAdapter(context, adapter);
         if (listener != null) listeners.add(listener);
         this.bulkContext = context == null ? null : context.getApplicationContext();
@@ -142,6 +150,56 @@ public final class MultiDeviceManager implements AutoCloseable {
                 started++;
             }
         }
+    }
+
+    /**
+     * Reconnects only peers that have previously completed an app-level
+     * RFCOMM connection on this phone. This avoids connecting to every
+     * unrelated Bluetooth bond on every service start.
+     */
+    @SuppressLint("MissingPermission")
+    public void reconnectEnrolledPeers() {
+        if (closed || bulkContext == null || adapter == null) return;
+
+        Set<String> enrolled = bulkContext
+                .getSharedPreferences(ENROLLMENT_PREFS, Context.MODE_PRIVATE)
+                .getStringSet(ENROLLED_PEERS, Collections.emptySet());
+        if (enrolled == null || enrolled.isEmpty()) return;
+
+        final Set<BluetoothDevice> bonded;
+        try {
+            bonded = adapter.getBondedDevices();
+        } catch (SecurityException denied) {
+            return;
+        }
+        if (bonded == null || bonded.isEmpty()) return;
+
+        Set<String> addresses = new TreeSet<>(enrolled);
+        int budget = MAX_CLASSIC_PEERS;
+        for (String address : addresses) {
+            if (budget <= 0) break;
+            for (BluetoothDevice device : bonded) {
+                try {
+                    if (address.equalsIgnoreCase(device.getAddress())) {
+                        connect(device);
+                        budget--;
+                        break;
+                    }
+                } catch (SecurityException ignored) {
+                    return;
+                }
+            }
+        }
+    }
+
+    private void rememberEnrolledPeer(String address) {
+        if (bulkContext == null || address == null || address.isEmpty()) return;
+        android.content.SharedPreferences prefs = bulkContext
+                .getSharedPreferences(ENROLLMENT_PREFS, Context.MODE_PRIVATE);
+        Set<String> enrolled = new HashSet<>(
+                prefs.getStringSet(ENROLLED_PEERS, Collections.emptySet()));
+        enrolled.add(address);
+        prefs.edit().putStringSet(ENROLLED_PEERS, enrolled).apply();
     }
 
     public List<DeviceSession> sessions() {
@@ -389,6 +447,7 @@ public final class MultiDeviceManager implements AutoCloseable {
                     new DeviceSession(device, socket, holder[0]);
             sessionHolder[0] = session;
             sessions.put(address, session);
+            rememberEnrolledPeer(address);
             retryAttempts.remove(address);
             holder[0].startReader();
 
