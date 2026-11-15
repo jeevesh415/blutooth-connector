@@ -16,6 +16,14 @@ The application enforces a seven-peer policy for Bluetooth Classic. That is an a
 
 The foreground ConnectionService owns the live transport graph. MainActivity binds to the service and only observes/commands it.
 
+## Multi-device controller and selection UI
+
+The controller maintains an independent authenticated session for each connected peer. The current Bluetooth Classic policy is seven peers per controller instance; this is a conservative application limit, not an Android-wide guarantee. The device dashboard supports selecting one peer for focused control or selecting multiple peers for group operations. Select-all and clear-selection controls make the target set explicit. Group operations currently include device-information refresh and stream-stop requests; operations that require a device-specific consent flow remain individually initiated.
+
+A device can be discovered/connected as a peer only when its Bluetooth pairing and app-side identity/authentication requirements are satisfied. Once enrolled, the service can reconnect known bonded peers using bounded backoff while Android permits the foreground service and Bluetooth operation. This is automatic reconnection after enrollment, not silent first-time enrollment or silent permission granting.
+
+Each phone runs its own receiver/agent. The controller does not bypass Android's lock screen, Accessibility consent, microphone permission, or MediaProjection consent. The target device's owner must grant the relevant local permissions. On Android 14 and later, each MediaProjection capture session requires fresh system consent; the user can stop projection from Android's system UI, and locking the device stops active projection. This is an OS security boundary, not an app setting.
+
 ## Control path
 
 Bluetooth RFCOMM is the current interactive control path. Large data is deliberately kept away from it.
