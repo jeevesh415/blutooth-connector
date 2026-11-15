@@ -17,6 +17,7 @@ import android.provider.Settings;
 import android.view.Gravity;
 import android.view.View;
 import android.widget.Button;
+import android.widget.CheckBox;
 import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
@@ -35,6 +36,8 @@ import com.jeevesh415.blutoothconnector.transport.WifiAwarePathManager;
 import org.json.JSONObject;
 
 import java.io.File;
+import java.util.HashSet;
+import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
 
 public final class DeviceSessionActivity extends Activity {
@@ -59,6 +62,8 @@ public final class DeviceSessionActivity extends Activity {
     private TextView peerInfo;
     private LinearLayout peerList;
     private DeviceSession selected;
+    private final Set<String> selectedPeerAddresses = new HashSet<>();
+    private TextView selectionSummary;
     private String pendingStreamPeer;
 
     @Override protected void onCreate(Bundle state) {
@@ -113,7 +118,31 @@ public final class DeviceSessionActivity extends Activity {
         peerList.setOrientation(LinearLayout.VERTICAL);
         peerList.setPadding(0, 8, 0, 0);
         peersCard.addView(peerList);
+
+        LinearLayout selectionActions = new LinearLayout(this);
+        selectionActions.setOrientation(LinearLayout.HORIZONTAL);
+        Button selectAll = compactAction("Select all");
+        selectAll.setOnClickListener(v -> selectAllPeers());
+        Button clearSelection = compactAction("Clear");
+        clearSelection.setOnClickListener(v -> clearPeerSelection());
+        LinearLayout.LayoutParams actionLp =
+                new LinearLayout.LayoutParams(0, 46, 1f);
+        actionLp.rightMargin = 8;
+        selectionActions.addView(selectAll, actionLp);
+        selectionActions.addView(clearSelection,
+                new LinearLayout.LayoutParams(0, 46, 1f));
+        peersCard.addView(selectionActions);
+
+        selectionSummary = text("0 devices selected", 12, textSecondary);
+        selectionSummary.setPadding(2, 8, 2, 0);
+        peersCard.addView(selectionSummary);
         root.addView(peersCard);
+
+        addSection(root, "GROUP OPERATIONS");
+        addButton(root, "↻  Refresh information on selected devices", panel2, textPrimary,
+                v -> querySelectedDevices());
+        addButton(root, "■  Stop streams on selected devices", panel2, textPrimary,
+                v -> stopSelectedStreams());
 
         addSection(root, "LIVE CONTROL");
         addButton(root, "◉  View screen + remote control", panel2, textPrimary,
@@ -250,38 +279,168 @@ public final class DeviceSessionActivity extends Activity {
         peerList.removeAllViews();
         if (peers == null || peers.sessions().isEmpty()) {
             selected = null;
+            selectedPeerAddresses.clear();
             peerInfo.setText("No connected peer");
             status.setText("Connect a device first.");
             TextView empty = text("No active device sessions.", 13, textSecondary);
             peerList.addView(empty);
+            updateSelectionSummary();
             return;
         }
 
+        Set<String> connected = new HashSet<>();
         for (DeviceSession session : peers.sessions()) {
-            Button peer = new Button(this);
-            peer.setText("●  " + safeName(session.device) + "\n    " + session.address());
-            peer.setAllCaps(false);
-            peer.setGravity(Gravity.CENTER_VERTICAL);
-            peer.setTextColor(textPrimary);
-            peer.setTextSize(13);
-            peer.setPadding(16, 4, 16, 4);
-            android.graphics.drawable.GradientDrawable shape =
+            connected.add(session.address());
+            LinearLayout row = new LinearLayout(this);
+            row.setOrientation(LinearLayout.HORIZONTAL);
+            row.setGravity(Gravity.CENTER_VERTICAL);
+            row.setPadding(10, 2, 10, 2);
+            android.graphics.drawable.GradientDrawable rowShape =
                     new android.graphics.drawable.GradientDrawable();
-            shape.setColor(panel2);
-            shape.setCornerRadius(18f);
-            peer.setBackground(shape);
+            rowShape.setColor(panel2);
+            rowShape.setCornerRadius(18f);
+            row.setBackground(rowShape);
+
+            CheckBox check = new CheckBox(this);
+            check.setButtonTintList(android.content.res.ColorStateList.valueOf(accent));
+            check.setChecked(selectedPeerAddresses.contains(session.address()));
+            check.setContentDescription("Select " + safeName(session.device)
+                    + " for group operations");
+            check.setOnCheckedChangeListener((button, checked) -> {
+                if (checked) selectedPeerAddresses.add(session.address());
+                else selectedPeerAddresses.remove(session.address());
+                updateSelectionSummary();
+            });
+            row.addView(check, new LinearLayout.LayoutParams(
+                    48, LinearLayout.LayoutParams.MATCH_PARENT));
+
+            Button peer = new Button(this);
+            peer.setText((selected != null
+                    && selected.address().equals(session.address()) ? "●  " : "○  ")
+                    + safeName(session.device) + "\\n    " + session.address());
+            peer.setAllCaps(false);
+            peer.setGravity(Gravity.CENTER_VERTICAL | Gravity.START);
+            peer.setTextColor(textPrimary);
+            peer.setTextSize(12);
+            peer.setPadding(8, 4, 8, 4);
+            peer.setBackgroundColor(Color.TRANSPARENT);
             peer.setOnClickListener(v -> {
                 selected = session;
                 showSelected();
                 rebuildPeerList();
             });
-            peerList.addView(peer, new LinearLayout.LayoutParams(-1, 62));
+            row.addView(peer, new LinearLayout.LayoutParams(
+                    0, 60, 1f));
+            LinearLayout.LayoutParams rowLp = new LinearLayout.LayoutParams(-1, 64);
+            rowLp.bottomMargin = 6;
+            peerList.addView(row, rowLp);
         }
 
+        selectedPeerAddresses.retainAll(connected);
         if (selected == null || !containsSelected()) {
             selected = peers.sessions().iterator().next();
         }
         showSelected();
+        updateSelectionSummary();
+    }
+
+    private Button compactAction(String label) {
+        Button button = new Button(this);
+        button.setText(label);
+        button.setTextSize(12);
+        button.setAllCaps(false);
+        button.setTextColor(textPrimary);
+        button.setBackgroundColor(panel2);
+        return button;
+    }
+
+    private void selectAllPeers() {
+        if (peers == null) return;
+        for (DeviceSession session : peers.sessions()) {
+            selectedPeerAddresses.add(session.address());
+        }
+        rebuildPeerList();
+    }
+
+    private void clearPeerSelection() {
+        selectedPeerAddresses.clear();
+        rebuildPeerList();
+    }
+
+    private void updateSelectionSummary() {
+        if (selectionSummary == null) return;
+        int connected = peers == null ? 0 : peers.sessions().size();
+        selectionSummary.setText(selectedPeerAddresses.size()
+                + " selected  •  " + connected + " connected");
+    }
+
+    private java.util.List<DeviceSession> selectedSessions() {
+        java.util.List<DeviceSession> result = new java.util.ArrayList<>();
+        if (peers == null) return result;
+        for (DeviceSession session : peers.sessions()) {
+            if (selectedPeerAddresses.contains(session.address())) {
+                result.add(session);
+            }
+        }
+        return result;
+    }
+
+    private void querySelectedDevices() {
+        java.util.List<DeviceSession> targets = selectedSessions();
+        if (targets.isEmpty()) {
+            status.setText("Select one or more connected devices first.");
+            return;
+        }
+
+        AtomicInteger completed = new AtomicInteger();
+        AtomicInteger failed = new AtomicInteger();
+        status.setText("Refreshing " + targets.size() + " selected devices…");
+        for (DeviceSession session : targets) {
+            try {
+                ReliableCommandClient client = new ReliableCommandClient(
+                        frame -> session.connection.send(frame),
+                        session.metrics::adaptiveTimeoutMs);
+                client.execute(session.nextSequence(), "device.info", "get", null)
+                        .whenComplete((frame, error) -> {
+                            client.close();
+                            if (error != null) failed.incrementAndGet();
+                            if (completed.incrementAndGet() == targets.size()) {
+                                runOnUiThread(() -> status.setText(
+                                        "Device refresh complete: "
+                                                + (targets.size() - failed.get())
+                                                + " succeeded, " + failed.get() + " failed."));
+                            }
+                        });
+            } catch (Exception error) {
+                failed.incrementAndGet();
+                if (completed.incrementAndGet() == targets.size()) {
+                    runOnUiThread(() -> status.setText(
+                            "Device refresh complete: "
+                                    + (targets.size() - failed.get())
+                                    + " succeeded, " + failed.get() + " failed."));
+                }
+            }
+        }
+    }
+
+    private void stopSelectedStreams() {
+        java.util.List<DeviceSession> targets = selectedSessions();
+        if (targets.isEmpty()) {
+            status.setText("Select one or more connected devices first.");
+            return;
+        }
+        int stopped = 0;
+        int failed = 0;
+        for (DeviceSession session : targets) {
+            try {
+                service.rtc().requestStop(session);
+                stopped++;
+            } catch (Exception error) {
+                failed++;
+            }
+        }
+        status.setText("Stop requested for " + stopped + " devices"
+                + (failed == 0 ? "." : "; " + failed + " requests failed."));
     }
 
     private boolean containsSelected() {
