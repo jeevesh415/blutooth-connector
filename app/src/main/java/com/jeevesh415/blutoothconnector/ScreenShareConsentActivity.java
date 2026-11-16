@@ -197,14 +197,9 @@ public final class ScreenShareConsentActivity extends Activity {
         }
         try {
             if (service == null) throw new IllegalStateException("Connection service disconnected");
-            service.startRequestedScreenShare(peerAddress, requestId, resultCode, data);
-            if (RemoteInputAccessibilityService.instance() != null) {
-                if (allowRemoteInput.isChecked()) {
-                    RemoteControlAuthorization.authorize(this, peerAddress);
-                } else {
-                    RemoteControlAuthorization.revoke(this, peerAddress);
-                }
-            }
+            service.startRequestedScreenShare(
+                    peerAddress, requestId, resultCode, data,
+                    allowRemoteInput.isChecked());
             responded = true;
             status.setText("Screen sharing started.");
             finish();
