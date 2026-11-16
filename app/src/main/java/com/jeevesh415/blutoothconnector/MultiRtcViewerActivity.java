@@ -50,6 +50,7 @@ public final class MultiRtcViewerActivity extends Activity {
     private ServiceConnection serviceConnection;
     private TextView summary;
     private RtcPeerManager.Listener rtcListener;
+    private boolean handingOffToFullScreen;
 
     @Override protected void onCreate(Bundle state) {
         super.onCreate(state);
@@ -243,12 +244,18 @@ public final class MultiRtcViewerActivity extends Activity {
     }
 
     private void openFullScreen(String peerAddress) {
+        handingOffToFullScreen = true;
         startActivity(new Intent(this, RtcViewerActivity.class)
                 .putExtra("peer_address", peerAddress));
         finish();
     }
 
     private void stopAllStreams() {
+        stopRequestedStreams();
+        finish();
+    }
+
+    private void stopRequestedStreams() {
         if (service != null && peers != null) {
             for (String address : peerAddresses) {
                 DeviceSession session = peers.session(address);
@@ -257,10 +264,14 @@ public final class MultiRtcViewerActivity extends Activity {
                 }
             }
         }
-        finish();
+    }
+
+    @Override public void onBackPressed() {
+        stopAllStreams();
     }
 
     @Override protected void onDestroy() {
+        if (!handingOffToFullScreen) stopRequestedStreams();
         for (Map.Entry<String, VideoTrack> entry : tracks.entrySet()) {
             VideoSink sink = sinks.get(entry.getKey());
             if (sink != null) {
