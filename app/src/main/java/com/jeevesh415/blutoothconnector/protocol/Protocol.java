@@ -40,6 +40,10 @@ public final class Protocol {
     public static final String RTC_ICE = "RTC_ICE";
     public static final String RTC_CONTROL = "RTC_CONTROL";
     public static final String RTC_STOP = "RTC_STOP";
+    // Requests are sent over an authenticated control session. The target
+    // owner must approve in-app and then complete Android MediaProjection consent.
+    public static final String RTC_SHARE_REQUEST = "RTC_SHARE_REQUEST";
+    public static final String RTC_SHARE_RESPONSE = "RTC_SHARE_RESPONSE";
 
     public static String id(long sequence) {
         return String.format(Locale.US, "%08x", sequence);
