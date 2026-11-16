@@ -203,7 +203,7 @@ public final class RtcPeerManager implements AutoCloseable {
         String expected = pendingScreenShareRequests.get(peer);
         if (expected == null || !expected.equals(requestId)) return;
         String status = frame.payload.optString("status", "unknown");
-        if (!"pending".equals(status)) {
+        if (!"pending".equals(status) && !"approved".equals(status)) {
             pendingScreenShareRequests.remove(peer, requestId);
         }
         listener.onState(peer, "screen-share:" + status);
