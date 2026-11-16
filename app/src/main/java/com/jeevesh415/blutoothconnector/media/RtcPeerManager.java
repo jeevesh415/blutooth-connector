@@ -146,6 +146,7 @@ public final class RtcPeerManager implements AutoCloseable {
                 engine.close();
             }
             listener.onError(peer, error);
+            throw new IllegalStateException("Could not start WebRTC screen publisher", error);
         }
     }
 
