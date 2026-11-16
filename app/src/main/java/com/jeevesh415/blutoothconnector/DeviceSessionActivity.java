@@ -497,15 +497,6 @@ public final class DeviceSessionActivity extends Activity {
             status.setText("Connection service is unavailable.");
             return;
         }
-        if (!service.rtc().hasSession(target.address())) {
-            try {
-                service.rtc().requestScreenShare(target);
-                status.setText("Screen request sent. Waiting for the device owner to approve.");
-            } catch (Exception error) {
-                status.setText("Could not request remote screen: " + error.getMessage());
-                return;
-            }
-        }
         startActivity(new Intent(this, RtcViewerActivity.class)
                 .putExtra("peer_address", target.address()));
     }
