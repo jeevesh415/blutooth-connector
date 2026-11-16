@@ -47,6 +47,8 @@ public final class RtcPeerManager implements AutoCloseable {
             new ConcurrentHashMap<>();
     private final Map<String, String> pendingScreenShareRequests =
             new ConcurrentHashMap<>();
+    private final Map<String, Boolean> remoteInputByPeer =
+            new ConcurrentHashMap<>();
 
     public RtcPeerManager(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -60,6 +62,13 @@ public final class RtcPeerManager implements AutoCloseable {
         for (Map.Entry<String, org.webrtc.VideoTrack> entry : lastRemoteVideos.entrySet()) {
             try {
                 listener.onRemoteVideo(entry.getKey(), entry.getValue());
+            } catch (Exception ignored) {}
+        }
+        for (Map.Entry<String, Boolean> entry : remoteInputByPeer.entrySet()) {
+            try {
+                listener.onState(entry.getKey(),
+                        "screen-share:approved:remote-input="
+                                + (entry.getValue() ? "allowed" : "view-only"));
             } catch (Exception ignored) {}
         }
     }
@@ -209,6 +218,9 @@ public final class RtcPeerManager implements AutoCloseable {
         }
         boolean remoteInputAllowed =
                 frame.payload.optBoolean("remoteInputAuthorized", false);
+        if ("approved".equals(status)) {
+            remoteInputByPeer.put(peer, remoteInputAllowed);
+        }
         listener.onState(peer, "screen-share:" + status
                 + ("approved".equals(status)
                     ? (remoteInputAllowed
@@ -472,6 +484,7 @@ public final class RtcPeerManager implements AutoCloseable {
         // may synchronously emit CLOSED while close() is running.
         sessionIds.remove(peerAddress);
         pendingScreenShareRequests.remove(peerAddress);
+        remoteInputByPeer.remove(peerAddress);
         inboundControl.remove(peerAddress);
         outboundControl.remove(peerAddress);
         lastRemoteVideos.remove(peerAddress);
@@ -485,6 +498,7 @@ public final class RtcPeerManager implements AutoCloseable {
         // Invalidate every session first so late native callbacks are ignored.
         sessionIds.clear();
         pendingScreenShareRequests.clear();
+        remoteInputByPeer.clear();
         inboundControl.clear();
         outboundControl.clear();
         lastRemoteVideos.clear();
