@@ -207,7 +207,13 @@ public final class RtcPeerManager implements AutoCloseable {
         if (!"pending".equals(status) && !"approved".equals(status)) {
             pendingScreenShareRequests.remove(peer, requestId);
         }
-        listener.onState(peer, "screen-share:" + status);
+        boolean remoteInputAllowed =
+                frame.payload.optBoolean("remoteInputAuthorized", false);
+        listener.onState(peer, "screen-share:" + status
+                + ("approved".equals(status)
+                    ? (remoteInputAllowed
+                        ? ":remote-input=allowed" : ":remote-input=view-only")
+                    : ""));
     }
 
     public void handle(DeviceSession session, Frame frame) {
