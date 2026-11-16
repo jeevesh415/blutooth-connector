@@ -75,6 +75,8 @@ public final class ConnectionService extends Service {
     private ConnectivityManager.NetworkCallback networkCallback;
     private final java.util.concurrent.ConcurrentHashMap<String, PendingScreenShareRequest>
             pendingScreenShareRequests = new java.util.concurrent.ConcurrentHashMap<>();
+    private final java.util.concurrent.ConcurrentHashMap<String, String>
+            activeScreenShareRequests = new java.util.concurrent.ConcurrentHashMap<>();
 
     private static final class PendingScreenShareRequest {
         final String requestId;
@@ -204,6 +206,7 @@ public final class ConnectionService extends Service {
             throw new SecurityException("Requesting peer is no longer authenticated");
         }
         startScreenShare(peerAddress, resultCode, projectionData, false);
+        activeScreenShareRequests.put(peerAddress, requestId);
         pendingScreenShareRequests.remove(peerAddress);
         cancelScreenShareNotification(peerAddress);
         sendScreenShareResponse(requester, requestId, "approved");
@@ -225,9 +228,16 @@ public final class ConnectionService extends Service {
         String requestId = frame.payload.optString("requestId", "");
         PendingScreenShareRequest pending =
                 pendingScreenShareRequests.get(session.address());
-        if (pending == null || !pending.requestId.equals(requestId)) return;
-        if (pendingScreenShareRequests.remove(session.address(), pending)) {
+        if (pending != null && pending.requestId.equals(requestId)
+                && pendingScreenShareRequests.remove(session.address(), pending)) {
             cancelScreenShareNotification(session.address());
+            sendScreenShareResponse(session, requestId, "cancelled");
+            return;
+        }
+        String activeRequestId = activeScreenShareRequests.get(session.address());
+        if (requestId.equals(activeRequestId)
+                && activeScreenShareRequests.remove(session.address(), activeRequestId)) {
+            try { rtc().requestStop(session); } catch (Exception ignored) {}
             sendScreenShareResponse(session, requestId, "cancelled");
         }
     }
@@ -470,6 +480,7 @@ public final class ConnectionService extends Service {
                             DeviceSession session,
                             Exception error) {
                         pendingScreenShareRequests.remove(session.address());
+                        activeScreenShareRequests.remove(session.address());
                         cancelScreenShareNotification(session.address());
                         if (rtc != null) {
                             rtc.stop(session.address());
@@ -659,6 +670,9 @@ public final class ConnectionService extends Service {
             if (Protocol.RTC_SHARE_RESPONSE.equals(frame.type)) {
                 rtc().handleShareResponse(session, frame);
                 return;
+            }
+            if (Protocol.RTC_STOP.equals(frame.type)) {
+                activeScreenShareRequests.remove(session.address());
             }
 
             if (Protocol.RTC_OFFER.equals(frame.type)
@@ -1143,6 +1157,7 @@ public final class ConnectionService extends Service {
 
     @Override public void onDestroy() {
         pendingScreenShareRequests.clear();
+        activeScreenShareRequests.clear();
         commandExecutor.shutdownNow();
         if (rtc != null) rtc.close();
         unregisterNetworkTopologyMonitor();
