@@ -41,6 +41,7 @@ public final class MainActivity extends Activity {
     private static final int REQUEST_LOCAL_NETWORK = 101;
     private static final int REQUEST_WIFI_DIRECT = 102;
     private static final int REQUEST_WIFI_AWARE = 103;
+    private static final int REQUEST_NOTIFICATIONS = 104;
     private static final int REQUEST_FILE = 200;
     private static final int REQUEST_SCREEN_CAPTURE = 300;
     private static final int REQUEST_STREAM_PERMISSIONS = 301;
@@ -163,6 +164,7 @@ public final class MainActivity extends Activity {
 
         if (missing.isEmpty()) {
             ensureConnectionService();
+            requestNotificationPermissionIfNeeded();
         } else {
             requestPermissions(
                     missing.toArray(new String[0]),
@@ -191,6 +193,8 @@ public final class MainActivity extends Activity {
         if (requestCode != REQUEST_BLUETOOTH_PERMISSIONS
                 && requestCode != REQUEST_LOCAL_NETWORK
                 && requestCode != REQUEST_WIFI_DIRECT
+                && requestCode != REQUEST_WIFI_AWARE
+                && requestCode != REQUEST_NOTIFICATIONS
                 && requestCode != REQUEST_STREAM_PERMISSIONS) {
             return;
         }
@@ -201,6 +205,13 @@ public final class MainActivity extends Activity {
                 allGranted = false;
                 break;
             }
+        }
+
+        if (requestCode == REQUEST_NOTIFICATIONS) {
+            status.setText(allGranted
+                    ? "Screen-share request notifications enabled."
+                    : "Enable notifications to receive remote screen-share requests.");
+            return;
         }
 
         if (requestCode == REQUEST_STREAM_PERMISSIONS) {
@@ -215,6 +226,7 @@ public final class MainActivity extends Activity {
         if (requestCode == REQUEST_BLUETOOTH_PERMISSIONS) {
             if (allGranted) {
                 ensureConnectionService();
+                requestNotificationPermissionIfNeeded();
                 status.setText(
                         "Bluetooth permissions granted. Connection service starting.");
             } else {
@@ -270,6 +282,16 @@ public final class MainActivity extends Activity {
         } else {
             status.setText(
                     "Local network permission was not granted.");
+        }
+    }
+
+    private void requestNotificationPermissionIfNeeded() {
+        if (Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS)
+                    != PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(
+                    new String[]{Manifest.permission.POST_NOTIFICATIONS},
+                    REQUEST_NOTIFICATIONS);
         }
     }
 
