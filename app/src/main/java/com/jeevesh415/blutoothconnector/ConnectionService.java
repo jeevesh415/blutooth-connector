@@ -197,7 +197,8 @@ public final class ConnectionService extends Service {
     }
 
     public synchronized void startRequestedScreenShare(
-            String peerAddress, String requestId, int resultCode, Intent projectionData) {
+            String peerAddress, String requestId, int resultCode, Intent projectionData,
+            boolean allowRemoteInput) {
         if (!hasPendingScreenShareRequest(peerAddress, requestId)) {
             throw new SecurityException("Screen-share request expired or was replaced");
         }
@@ -205,7 +206,19 @@ public final class ConnectionService extends Service {
         if (requester == null || !requester.authenticated) {
             throw new SecurityException("Requesting peer is no longer authenticated");
         }
+        if (allowRemoteInput
+                && RemoteInputAccessibilityService.instance() == null) {
+            throw new SecurityException(
+                    "Accessibility must be enabled before remote input can be authorized");
+        }
         startScreenShare(peerAddress, resultCode, projectionData, false);
+        if (RemoteInputAccessibilityService.instance() != null) {
+            if (allowRemoteInput) {
+                RemoteControlAuthorization.authorize(this, peerAddress);
+            } else {
+                RemoteControlAuthorization.revoke(this, peerAddress);
+            }
+        }
         activeScreenShareRequests.put(peerAddress, requestId);
         pendingScreenShareRequests.remove(peerAddress);
         cancelScreenShareNotification(peerAddress);
@@ -338,7 +351,11 @@ public final class ConnectionService extends Service {
                     session.nextSequence(),
                     System.currentTimeMillis(),
                     new JSONObject().put("requestId", requestId)
-                            .put("status", status)));
+                            .put("status", status)
+                            .put("remoteInputAuthorized",
+                                    RemoteInputAccessibilityService.instance() != null
+                                    && RemoteControlAuthorization.isAuthorized(
+                                            this, session.address()))));
         } catch (Exception ignored) {}
     }
 
