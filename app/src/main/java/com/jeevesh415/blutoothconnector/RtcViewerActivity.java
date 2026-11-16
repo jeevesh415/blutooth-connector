@@ -208,10 +208,12 @@ public final class RtcViewerActivity extends Activity {
                     }
 
                     @Override public void onState(String peer, String state) {
+                        if (!peer.equals(peerAddress)) return;
                         runOnUiThread(() -> updateState(peer, state));
                     }
 
                     @Override public void onError(String peer, Exception error) {
+                        if (!peer.equals(peerAddress)) return;
                         runOnUiThread(() -> {
                             if (connectionBadge != null) {
                                 connectionBadge.setText(peer + "  •  ERROR");
