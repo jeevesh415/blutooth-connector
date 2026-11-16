@@ -54,6 +54,9 @@ public final class ConnectionService extends Service {
     private static final int NOTIFICATION_ID = 7;
     private static final int COMMAND_WORKERS = 4;
     private static final int MAX_PENDING_COMMANDS = 64;
+    private static final String SCREEN_SHARE_CHANNEL = "screen_share_requests";
+    private static final long SCREEN_SHARE_REQUEST_TTL_MS = 120_000L;
+    private static final int SCREEN_SHARE_NOTIFICATION_BASE = 3000;
 
     private final IBinder binder =
             new LocalBinder();
@@ -70,6 +73,17 @@ public final class ConnectionService extends Service {
     private RtcPeerManager rtc;
     private ConnectivityManager connectivityManager;
     private ConnectivityManager.NetworkCallback networkCallback;
+    private final java.util.concurrent.ConcurrentHashMap<String, PendingScreenShareRequest>
+            pendingScreenShareRequests = new java.util.concurrent.ConcurrentHashMap<>();
+
+    private static final class PendingScreenShareRequest {
+        final String requestId;
+        final long createdAtMs;
+        PendingScreenShareRequest(String requestId) {
+            this.requestId = requestId;
+            this.createdAtMs = System.currentTimeMillis();
+        }
+    }
 
     private final ThreadPoolExecutor commandExecutor =
             new ThreadPoolExecutor(
@@ -121,6 +135,14 @@ public final class ConnectionService extends Service {
             String peerAddress,
             int resultCode,
             Intent projectionData) {
+        startScreenShare(peerAddress, resultCode, projectionData, true);
+    }
+
+    public synchronized void startScreenShare(
+            String peerAddress,
+            int resultCode,
+            Intent projectionData,
+            boolean includeMicrophone) {
         if (peers == null) {
             throw new IllegalStateException("Connection service not ready");
         }
@@ -131,10 +153,11 @@ public final class ConnectionService extends Service {
         if (projectionData == null) {
             throw new IllegalArgumentException("projectionData");
         }
-        if (checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
-                != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+        if (includeMicrophone
+                && checkSelfPermission(android.Manifest.permission.RECORD_AUDIO)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
             throw new SecurityException(
-                    "Microphone permission is required for screen-share publishing");
+                    "Microphone permission is required when audio sharing is enabled");
         }
 
         DeviceSession target = peers.session(peerAddress);
@@ -146,15 +169,148 @@ public final class ConnectionService extends Service {
         }
 
         if (android.os.Build.VERSION.SDK_INT >= 29) {
-            startForeground(
-                    NOTIFICATION_ID,
-                    notification(),
+            int foregroundTypes =
                     ServiceInfo.FOREGROUND_SERVICE_TYPE_CONNECTED_DEVICE
-                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION
-                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE);
+                            | ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION;
+            if (includeMicrophone) {
+                foregroundTypes |= ServiceInfo.FOREGROUND_SERVICE_TYPE_MICROPHONE;
+            }
+            startForeground(NOTIFICATION_ID, notification(), foregroundTypes);
         }
 
-        rtc().startPublisher(target, projectionData, 1280, 720, 30);
+        rtc().startPublisher(
+                target, projectionData, 1280, 720, 30, includeMicrophone);
+    }
+
+    public boolean hasPendingScreenShareRequest(String peerAddress, String requestId) {
+        PendingScreenShareRequest pending = pendingScreenShareRequests.get(peerAddress);
+        if (pending == null || requestId == null
+                || !pending.requestId.equals(requestId)) return false;
+        if (System.currentTimeMillis() - pending.createdAtMs > SCREEN_SHARE_REQUEST_TTL_MS) {
+            pendingScreenShareRequests.remove(peerAddress, pending);
+            cancelScreenShareNotification(peerAddress);
+            return false;
+        }
+        return true;
+    }
+
+    public synchronized void startRequestedScreenShare(
+            String peerAddress, String requestId, int resultCode, Intent projectionData) {
+        if (!hasPendingScreenShareRequest(peerAddress, requestId)) {
+            throw new SecurityException("Screen-share request expired or was replaced");
+        }
+        DeviceSession requester = peers == null ? null : peers.session(peerAddress);
+        if (requester == null || !requester.authenticated) {
+            throw new SecurityException("Requesting peer is no longer authenticated");
+        }
+        startScreenShare(peerAddress, resultCode, projectionData, false);
+        pendingScreenShareRequests.remove(peerAddress);
+        cancelScreenShareNotification(peerAddress);
+        sendScreenShareResponse(requester, requestId, "approved");
+    }
+
+    public synchronized void respondToScreenShareRequest(
+            String peerAddress, String requestId, String response) {
+        if (!"declined".equals(response) && !"dismissed".equals(response)) {
+            throw new IllegalArgumentException("Unsupported screen-share response");
+        }
+        if (!hasPendingScreenShareRequest(peerAddress, requestId)) return;
+        pendingScreenShareRequests.remove(peerAddress);
+        cancelScreenShareNotification(peerAddress);
+        DeviceSession requester = peers == null ? null : peers.session(peerAddress);
+        if (requester != null) sendScreenShareResponse(requester, requestId, response);
+    }
+
+    private void handleScreenShareRequest(DeviceSession session, Frame frame) {
+        String requestId = frame.payload.optString("requestId", "");
+        if (requestId.length() < 8 || requestId.length() > 64) {
+            sendScreenShareResponse(session, requestId, "invalid_request");
+            return;
+        }
+        if (rtc().hasSession(session.address())) {
+            sendScreenShareResponse(session, requestId, "already_streaming");
+            return;
+        }
+        pendingScreenShareRequests.put(
+                session.address(), new PendingScreenShareRequest(requestId));
+        postScreenShareNotification(session, requestId);
+    }
+
+    private void postScreenShareNotification(DeviceSession session, String requestId) {
+        if (android.os.Build.VERSION.SDK_INT >= 33
+                && checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            pendingScreenShareRequests.remove(session.address());
+            sendScreenShareResponse(session, requestId, "notifications_disabled");
+            return;
+        }
+        NotificationManager manager =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager == null || !manager.areNotificationsEnabled()) {
+            pendingScreenShareRequests.remove(session.address());
+            sendScreenShareResponse(session, requestId, "notifications_disabled");
+            return;
+        }
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            NotificationChannel channel = new NotificationChannel(
+                    SCREEN_SHARE_CHANNEL,
+                    "Screen-sharing requests",
+                    NotificationManager.IMPORTANCE_HIGH);
+            channel.setDescription(
+                    "Requests from authenticated devices to view this phone screen");
+            manager.createNotificationChannel(channel);
+        }
+        Intent intent = new Intent(this, ScreenShareConsentActivity.class)
+                .putExtra(ScreenShareConsentActivity.EXTRA_PEER_ADDRESS, session.address())
+                .putExtra(ScreenShareConsentActivity.EXTRA_REQUEST_ID, requestId)
+                .putExtra(ScreenShareConsentActivity.EXTRA_PEER_NAME, safePeerName(session));
+        int requestCode = requestId.hashCode() & 0x7fffffff;
+        android.app.PendingIntent contentIntent = android.app.PendingIntent.getActivity(
+                this, requestCode, intent,
+                android.app.PendingIntent.FLAG_UPDATE_CURRENT
+                        | android.app.PendingIntent.FLAG_IMMUTABLE);
+        Notification notification = new Notification.Builder(this, SCREEN_SHARE_CHANNEL)
+                .setSmallIcon(android.R.drawable.ic_menu_view)
+                .setContentTitle("Screen-sharing request")
+                .setContentText(safePeerName(session) + " wants to view this phone screen")
+                .setAutoCancel(true)
+                .setContentIntent(contentIntent)
+                .build();
+        manager.notify(screenShareNotificationId(session.address()), notification);
+    }
+
+    private String safePeerName(DeviceSession session) {
+        try {
+            String name = session.device == null ? null : session.device.getName();
+            return name == null || name.trim().isEmpty()
+                    ? "A connected device" : name;
+        } catch (Exception ignored) {
+            return "A connected device";
+        }
+    }
+
+    private int screenShareNotificationId(String peerAddress) {
+        return SCREEN_SHARE_NOTIFICATION_BASE + Math.floorMod(peerAddress.hashCode(), 50000);
+    }
+
+    private void cancelScreenShareNotification(String peerAddress) {
+        NotificationManager manager =
+                (NotificationManager) getSystemService(NOTIFICATION_SERVICE);
+        if (manager != null) manager.cancel(screenShareNotificationId(peerAddress));
+    }
+
+    private void sendScreenShareResponse(
+            DeviceSession session, String requestId, String status) {
+        if (session == null || !session.authenticated) return;
+        try {
+            session.connection.send(new Frame(
+                    Protocol.VERSION,
+                    Protocol.RTC_SHARE_RESPONSE,
+                    session.nextSequence(),
+                    System.currentTimeMillis(),
+                    new JSONObject().put("requestId", requestId)
+                            .put("status", status)));
+        } catch (Exception ignored) {}
     }
 
     public synchronized void startWifiDirect() {
@@ -302,6 +458,8 @@ public final class ConnectionService extends Service {
                     @Override public void onDisconnected(
                             DeviceSession session,
                             Exception error) {
+                        pendingScreenShareRequests.remove(session.address());
+                        cancelScreenShareNotification(session.address());
                         if (rtc != null) {
                             rtc.stop(session.address());
                         }
@@ -476,6 +634,15 @@ public final class ConnectionService extends Service {
                                                 0))));
                 session.lastTxMs =
                         System.currentTimeMillis();
+                return;
+            }
+
+            if (Protocol.RTC_SHARE_REQUEST.equals(frame.type)) {
+                handleScreenShareRequest(session, frame);
+                return;
+            }
+            if (Protocol.RTC_SHARE_RESPONSE.equals(frame.type)) {
+                rtc().handleShareResponse(session, frame);
                 return;
             }
 
@@ -959,6 +1126,7 @@ public final class ConnectionService extends Service {
     }
 
     @Override public void onDestroy() {
+        pendingScreenShareRequests.clear();
         commandExecutor.shutdownNow();
         if (rtc != null) rtc.close();
         unregisterNetworkTopologyMonitor();
