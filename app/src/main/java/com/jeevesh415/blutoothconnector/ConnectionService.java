@@ -301,10 +301,18 @@ public final class ConnectionService extends Service {
     }
 
     private String safePeerName(DeviceSession session) {
+        if (session == null || session.device == null) return "A connected device";
+        if (android.os.Build.VERSION.SDK_INT >= 31
+                && checkSelfPermission(android.Manifest.permission.BLUETOOTH_CONNECT)
+                    != android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            return "A connected device";
+        }
         try {
-            String name = session.device == null ? null : session.device.getName();
+            String name = session.device.getName();
             return name == null || name.trim().isEmpty()
                     ? "A connected device" : name;
+        } catch (SecurityException ignored) {
+            return "A connected device";
         } catch (Exception ignored) {
             return "A connected device";
         }
