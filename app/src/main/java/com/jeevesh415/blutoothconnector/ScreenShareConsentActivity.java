@@ -7,8 +7,13 @@ import android.content.ServiceConnection;
 import android.media.projection.MediaProjectionManager;
 import android.os.Bundle;
 import android.os.IBinder;
+import android.provider.Settings;
 import android.view.Gravity;
 import android.widget.Button;
+import android.widget.CheckBox;
+
+import com.jeevesh415.blutoothconnector.control.RemoteControlAuthorization;
+import com.jeevesh415.blutoothconnector.control.RemoteInputAccessibilityService;
 import android.widget.LinearLayout;
 import android.widget.TextView;
 
@@ -32,6 +37,8 @@ public final class ScreenShareConsentActivity extends Activity {
     private ServiceConnection serviceConnection;
     private TextView status;
     private Button approveButton;
+    private CheckBox allowRemoteInput;
+    private Button accessibilityButton;
     private boolean responded;
     private boolean capturePromptOpen;
 
@@ -79,6 +86,28 @@ public final class ScreenShareConsentActivity extends Activity {
         status.setTextSize(13);
         root.addView(status);
 
+        allowRemoteInput = new CheckBox(this);
+        allowRemoteInput.setText("Also allow remote touch and navigation");
+        allowRemoteInput.setTextColor(0xFFF4F8FF);
+        allowRemoteInput.setButtonTintList(
+                android.content.res.ColorStateList.valueOf(0xFF55D6FF));
+        allowRemoteInput.setPadding(0, dp(14), 0, dp(4));
+        root.addView(allowRemoteInput);
+
+        TextView controlNote = new TextView(this);
+        controlNote.setText(
+                "Remote input is a separate permission. It requires you to enable "
+                + "this app's Accessibility service in Android Settings.");
+        controlNote.setTextColor(0xFF9DB0C8);
+        controlNote.setTextSize(12);
+        root.addView(controlNote);
+
+        accessibilityButton = new Button(this);
+        accessibilityButton.setText("Open Accessibility settings");
+        accessibilityButton.setAllCaps(false);
+        accessibilityButton.setOnClickListener(v -> openAccessibilitySettings());
+        root.addView(accessibilityButton);
+
         approveButton = new Button(this);
         approveButton.setText("Share screen");
         approveButton.setAllCaps(false);
@@ -115,6 +144,7 @@ public final class ScreenShareConsentActivity extends Activity {
                     boolean valid = service.hasPendingScreenShareRequest(
                             peerAddress, requestId);
                     approveButton.setEnabled(valid);
+                    updateRemoteInputAvailability();
                     status.setText(valid
                             ? "Connected request verified. Screen-only sharing; microphone is off."
                             : "This request expired or the connection is no longer valid.");
@@ -168,6 +198,13 @@ public final class ScreenShareConsentActivity extends Activity {
         try {
             if (service == null) throw new IllegalStateException("Connection service disconnected");
             service.startRequestedScreenShare(peerAddress, requestId, resultCode, data);
+            if (RemoteInputAccessibilityService.instance() != null) {
+                if (allowRemoteInput.isChecked()) {
+                    RemoteControlAuthorization.authorize(this, peerAddress);
+                } else {
+                    RemoteControlAuthorization.revoke(this, peerAddress);
+                }
+            }
             responded = true;
             status.setText("Screen sharing started.");
             finish();
@@ -180,6 +217,31 @@ public final class ScreenShareConsentActivity extends Activity {
             responded = true;
             status.setText("Screen sharing could not start: " + error.getMessage());
             finish();
+        }
+    }
+
+    private void updateRemoteInputAvailability() {
+        boolean accessibilityEnabled =
+                RemoteInputAccessibilityService.instance() != null;
+        allowRemoteInput.setEnabled(accessibilityEnabled);
+        allowRemoteInput.setChecked(accessibilityEnabled
+                && RemoteControlAuthorization.isAuthorized(this, peerAddress));
+        accessibilityButton.setVisibility(accessibilityEnabled
+                ? android.view.View.GONE : android.view.View.VISIBLE);
+    }
+
+    private void openAccessibilitySettings() {
+        try {
+            startActivity(new Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS));
+        } catch (Exception error) {
+            status.setText("Android Accessibility settings are unavailable.");
+        }
+    }
+
+    @Override protected void onResume() {
+        super.onResume();
+        if (allowRemoteInput != null && service != null) {
+            updateRemoteInputAvailability();
         }
     }
 
