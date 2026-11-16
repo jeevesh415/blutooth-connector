@@ -240,7 +240,7 @@ public final class ScreenShareConsentActivity extends Activity {
 
     @Override protected void onResume() {
         super.onResume();
-        if (allowRemoteInput != null && service != null) {
+        if (allowRemoteInput != null && service != null && !capturePromptOpen) {
             updateRemoteInputAvailability();
         }
     }
