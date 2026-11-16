@@ -844,6 +844,7 @@ public final class ConnectionService extends Service {
                 && session.remoteAuthVerified
                 && session.authOkReceived) {
             session.authenticated = true;
+            if (peers != null) peers.markEnrolledPeer(session.address());
             sendCapabilities(session);
         }
     }
