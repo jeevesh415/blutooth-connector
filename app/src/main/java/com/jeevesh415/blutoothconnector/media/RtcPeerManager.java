@@ -64,6 +64,17 @@ public final class RtcPeerManager implements AutoCloseable {
         }
     }
 
+    /** Detach an activity listener without clearing a newer listener installed later. */
+    public void clearListener(Listener expected) {
+        if (expected == null || listener != expected) return;
+        listener = new Listener() {
+            @Override public void onRemoteVideo(
+                    String peerAddress, org.webrtc.VideoTrack track) {}
+            @Override public void onState(String peerAddress, String state) {}
+            @Override public void onError(String peerAddress, Exception error) {}
+        };
+    }
+
     public void sendControl(String peerAddress, JSONObject command) {
         if (command == null) throw new IllegalArgumentException("command");
         LowLatencyRtcEngine engine = engines.get(peerAddress);
