@@ -179,6 +179,23 @@ public final class RtcPeerManager implements AutoCloseable {
         return peerAddress != null && engines.containsKey(peerAddress);
     }
 
+    public void cancelScreenShareRequest(DeviceSession session) {
+        if (session == null) return;
+        String peer = session.address();
+        String requestId = pendingScreenShareRequests.remove(peer);
+        if (requestId == null) return;
+        try {
+            session.connection.send(new Frame(
+                    Protocol.VERSION,
+                    Protocol.RTC_SHARE_CANCEL,
+                    session.nextSequence(),
+                    System.currentTimeMillis(),
+                    new JSONObject().put("requestId", requestId)));
+        } catch (Exception error) {
+            listener.onError(peer, error);
+        }
+    }
+
     public void handleShareResponse(DeviceSession session, Frame frame) {
         if (session == null || frame == null) return;
         String peer = session.address();
@@ -426,6 +443,9 @@ public final class RtcPeerManager implements AutoCloseable {
     public void requestStop(DeviceSession session) {
         if (session == null) return;
         String peer = session.address();
+        if (!sessionIds.containsKey(peer)) {
+            cancelScreenShareRequest(session);
+        }
         String sid = sessionIds.get(peer);
         if (sid != null) {
             try {
