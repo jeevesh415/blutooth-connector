@@ -47,6 +47,7 @@ public final class RtcViewerActivity extends Activity {
     private TextView liveDot;
     private CheckBox controlToggle;
     private ServiceConnection connection;
+    private RtcPeerManager.Listener rtcListener;
     private ConnectionService service;
     private MultiDeviceManager peers;
     private String peerAddress;
@@ -125,7 +126,8 @@ public final class RtcViewerActivity extends Activity {
         controlToggle.setTextSize(10);
         controlToggle.setGravity(Gravity.CENTER);
         controlToggle.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        controlToggle.setChecked(true);
+        controlToggle.setChecked(false);
+        controlToggle.setEnabled(false);
         controlToggle.setPadding(0, 0, 0, dp(5));
         palette.addView(controlToggle);
 
@@ -192,11 +194,14 @@ public final class RtcViewerActivity extends Activity {
                         (ConnectionService.LocalBinder) binder;
                 service = local.service();
                 peers = service.peers();
-                if (peers != null && !peers.sessions().isEmpty()) {
+                if (peerAddress == null) {
+                    peerAddress = getIntent().getStringExtra("peer_address");
+                }
+                if (peerAddress == null && peers != null && !peers.sessions().isEmpty()) {
                     peerAddress = peers.sessions().iterator().next().address();
                 }
 
-                service.rtc().setListener(new RtcPeerManager.Listener() {
+                rtcListener = new RtcPeerManager.Listener() {
                     @Override public void onRemoteVideo(String peer, VideoTrack track) {
                         if (peerAddress == null) peerAddress = peer;
                         if (!peer.equals(peerAddress) || renderer == null) return;
@@ -204,10 +209,12 @@ public final class RtcViewerActivity extends Activity {
                     }
 
                     @Override public void onState(String peer, String state) {
+                        if (!peer.equals(peerAddress)) return;
                         runOnUiThread(() -> updateState(peer, state));
                     }
 
                     @Override public void onError(String peer, Exception error) {
+                        if (!peer.equals(peerAddress)) return;
                         runOnUiThread(() -> {
                             if (connectionBadge != null) {
                                 connectionBadge.setText(peer + "  •  ERROR");
@@ -218,12 +225,26 @@ public final class RtcViewerActivity extends Activity {
                             }
                         });
                     }
-                });
+                };
+                service.rtc().setListener(rtcListener);
 
-                status.setText(
-                        peerAddress == null
-                                ? "Waiting for a connected publisher…"
-                                : "Waiting for screen stream…");
+                DeviceSession target = peers == null || peerAddress == null
+                        ? null : peers.session(peerAddress);
+                if (peerAddress == null) {
+                    status.setText("Waiting for a connected publisher…");
+                } else if (target == null) {
+                    status.setText("Selected device is not connected.");
+                } else if (service.rtc().hasSession(peerAddress)) {
+                    status.setText("Connected to the existing remote screen.");
+                } else {
+                    try {
+                        service.rtc().requestScreenShare(target);
+                        status.setText(
+                                "Screen request sent. Waiting for the device owner to approve.");
+                    } catch (Exception error) {
+                        status.setText("Could not request screen: " + error.getMessage());
+                    }
+                }
             }
 
             @Override public void onServiceDisconnected(ComponentName name) {
@@ -249,7 +270,20 @@ public final class RtcViewerActivity extends Activity {
 
     private void updateState(String peer, String state) {
         if (connectionBadge != null) connectionBadge.setText(peer + "  •  " + state);
-        if (status != null) status.setText(state);
+        if (state != null && state.startsWith("screen-share:approved")) {
+            boolean remoteInputAllowed = state.endsWith("remote-input=allowed");
+            if (controlToggle != null) {
+                controlToggle.setChecked(remoteInputAllowed);
+                controlToggle.setEnabled(remoteInputAllowed);
+            }
+            if (status != null) {
+                status.setText(remoteInputAllowed
+                        ? "Screen approved · remote input authorized"
+                        : "Screen approved · view-only access");
+            }
+        } else if (status != null) {
+            status.setText(state);
+        }
         if (liveDot != null) {
             liveDot.setTextColor(
                     state != null && state.toUpperCase().contains("LIVE") ? LIVE : ACCENT);
@@ -426,6 +460,10 @@ public final class RtcViewerActivity extends Activity {
     @Override protected void onDestroy() {
         if (service != null && peers != null && peerAddress != null) {
             try { stopRemoteStream(); } catch (Exception ignored) {}
+        }
+        if (service != null && rtcListener != null) {
+            service.rtc().clearListener(rtcListener);
+            rtcListener = null;
         }
         if (activeTrack != null && activeSink != null) {
             try { activeTrack.removeSink(activeSink); } catch (Exception ignored) {}

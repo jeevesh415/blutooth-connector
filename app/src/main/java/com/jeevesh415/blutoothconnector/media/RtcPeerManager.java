@@ -45,6 +45,10 @@ public final class RtcPeerManager implements AutoCloseable {
             new ConcurrentHashMap<>();
     private final Map<String, String> sessionIds =
             new ConcurrentHashMap<>();
+    private final Map<String, String> pendingScreenShareRequests =
+            new ConcurrentHashMap<>();
+    private final Map<String, Boolean> remoteInputByPeer =
+            new ConcurrentHashMap<>();
 
     public RtcPeerManager(Context context, Listener listener) {
         this.context = context.getApplicationContext();
@@ -60,6 +64,24 @@ public final class RtcPeerManager implements AutoCloseable {
                 listener.onRemoteVideo(entry.getKey(), entry.getValue());
             } catch (Exception ignored) {}
         }
+        for (Map.Entry<String, Boolean> entry : remoteInputByPeer.entrySet()) {
+            try {
+                listener.onState(entry.getKey(),
+                        "screen-share:approved:remote-input="
+                                + (entry.getValue() ? "allowed" : "view-only"));
+            } catch (Exception ignored) {}
+        }
+    }
+
+    /** Detach an activity listener without clearing a newer listener installed later. */
+    public void clearListener(Listener expected) {
+        if (expected == null || listener != expected) return;
+        listener = new Listener() {
+            @Override public void onRemoteVideo(
+                    String peerAddress, org.webrtc.VideoTrack track) {}
+            @Override public void onState(String peerAddress, String state) {}
+            @Override public void onError(String peerAddress, Exception error) {}
+        };
     }
 
     public void sendControl(String peerAddress, JSONObject command) {
@@ -97,6 +119,18 @@ public final class RtcPeerManager implements AutoCloseable {
                                int width,
                                int height,
                                int fps) {
+        startPublisher(session, projectionData, width, height, fps, true);
+    }
+
+    public void startPublisher(DeviceSession session,
+                               Intent projectionData,
+                               int width,
+                               int height,
+                               int fps,
+                               boolean includeMicrophone) {
+        if (session == null || !session.authenticated) {
+            throw new SecurityException("An authenticated peer is required");
+        }
         final String peer = session.address();
         stop(peer);
         String sessionId = java.util.UUID.randomUUID().toString();
@@ -106,7 +140,7 @@ public final class RtcPeerManager implements AutoCloseable {
 
         LowLatencyRtcEngine engine = create(session, sessionId);
         try {
-            engine.addMicrophone();
+            if (includeMicrophone) engine.addMicrophone();
             engine.startScreen(projectionData, width, height, fps);
             engine.createControlChannel();
             engine.createOffer();
@@ -121,7 +155,77 @@ public final class RtcPeerManager implements AutoCloseable {
                 engine.close();
             }
             listener.onError(peer, error);
+            throw new IllegalStateException("Could not start WebRTC screen publisher", error);
         }
+    }
+
+    /** Request an owner-approved screen share from a connected peer. */
+    public String requestScreenShare(DeviceSession session) {
+        if (session == null || !session.authenticated) {
+            throw new SecurityException("An authenticated peer is required");
+        }
+        String peer = session.address();
+        if (engines.containsKey(peer)) return "active";
+        String requestId = java.util.UUID.randomUUID().toString();
+        pendingScreenShareRequests.put(peer, requestId);
+        try {
+            session.connection.send(new Frame(
+                    Protocol.VERSION,
+                    Protocol.RTC_SHARE_REQUEST,
+                    session.nextSequence(),
+                    System.currentTimeMillis(),
+                    new JSONObject().put("requestId", requestId)
+                            .put("purpose", "remote-screen-view")));
+            listener.onState(peer, "screen-share:requested");
+            return requestId;
+        } catch (Exception error) {
+            pendingScreenShareRequests.remove(peer, requestId);
+            listener.onError(peer, error);
+            throw new IllegalStateException("Could not request remote screen", error);
+        }
+    }
+
+    public boolean hasSession(String peerAddress) {
+        return peerAddress != null && engines.containsKey(peerAddress);
+    }
+
+    public void cancelScreenShareRequest(DeviceSession session) {
+        if (session == null) return;
+        String peer = session.address();
+        String requestId = pendingScreenShareRequests.remove(peer);
+        if (requestId == null) return;
+        try {
+            session.connection.send(new Frame(
+                    Protocol.VERSION,
+                    Protocol.RTC_SHARE_CANCEL,
+                    session.nextSequence(),
+                    System.currentTimeMillis(),
+                    new JSONObject().put("requestId", requestId)));
+        } catch (Exception error) {
+            listener.onError(peer, error);
+        }
+    }
+
+    public void handleShareResponse(DeviceSession session, Frame frame) {
+        if (session == null || frame == null) return;
+        String peer = session.address();
+        String requestId = frame.payload.optString("requestId", "");
+        String expected = pendingScreenShareRequests.get(peer);
+        if (expected == null || !expected.equals(requestId)) return;
+        String status = frame.payload.optString("status", "unknown");
+        if (!"pending".equals(status) && !"approved".equals(status)) {
+            pendingScreenShareRequests.remove(peer, requestId);
+        }
+        boolean remoteInputAllowed =
+                frame.payload.optBoolean("remoteInputAuthorized", false);
+        if ("approved".equals(status)) {
+            remoteInputByPeer.put(peer, remoteInputAllowed);
+        }
+        listener.onState(peer, "screen-share:" + status
+                + ("approved".equals(status)
+                    ? (remoteInputAllowed
+                        ? ":remote-input=allowed" : ":remote-input=view-only")
+                    : ""));
     }
 
     public void handle(DeviceSession session, Frame frame) {
@@ -287,6 +391,7 @@ public final class RtcPeerManager implements AutoCloseable {
                     @Override public void onRemoteVideo(org.webrtc.VideoTrack track) {
                         if (!isCurrentSession(peer, sessionId)) return;
                         lastRemoteVideos.put(peer, track);
+                        pendingScreenShareRequests.remove(peer);
                         try {
                             listener.onRemoteVideo(peer, track);
                         } catch (Exception error) {
@@ -357,6 +462,9 @@ public final class RtcPeerManager implements AutoCloseable {
     public void requestStop(DeviceSession session) {
         if (session == null) return;
         String peer = session.address();
+        if (!sessionIds.containsKey(peer)) {
+            cancelScreenShareRequest(session);
+        }
         String sid = sessionIds.get(peer);
         if (sid != null) {
             try {
@@ -375,6 +483,8 @@ public final class RtcPeerManager implements AutoCloseable {
         // Invalidate callback routing before closing native resources. WebRTC
         // may synchronously emit CLOSED while close() is running.
         sessionIds.remove(peerAddress);
+        pendingScreenShareRequests.remove(peerAddress);
+        remoteInputByPeer.remove(peerAddress);
         inboundControl.remove(peerAddress);
         outboundControl.remove(peerAddress);
         lastRemoteVideos.remove(peerAddress);
@@ -387,6 +497,8 @@ public final class RtcPeerManager implements AutoCloseable {
     @Override public void close() {
         // Invalidate every session first so late native callbacks are ignored.
         sessionIds.clear();
+        pendingScreenShareRequests.clear();
+        remoteInputByPeer.clear();
         inboundControl.clear();
         outboundControl.clear();
         lastRemoteVideos.clear();
