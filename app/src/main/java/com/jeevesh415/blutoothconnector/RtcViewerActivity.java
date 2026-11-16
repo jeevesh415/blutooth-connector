@@ -266,7 +266,20 @@ public final class RtcViewerActivity extends Activity {
 
     private void updateState(String peer, String state) {
         if (connectionBadge != null) connectionBadge.setText(peer + "  •  " + state);
-        if (status != null) status.setText(state);
+        if (state != null && state.startsWith("screen-share:approved")) {
+            boolean remoteInputAllowed = state.endsWith("remote-input=allowed");
+            if (controlToggle != null) {
+                controlToggle.setChecked(remoteInputAllowed);
+                controlToggle.setEnabled(remoteInputAllowed);
+            }
+            if (status != null) {
+                status.setText(remoteInputAllowed
+                        ? "Screen approved · remote input authorized"
+                        : "Screen approved · view-only access");
+            }
+        } else if (status != null) {
+            status.setText(state);
+        }
         if (liveDot != null) {
             liveDot.setTextColor(
                     state != null && state.toUpperCase().contains("LIVE") ? LIVE : ACCENT);
