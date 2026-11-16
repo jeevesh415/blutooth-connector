@@ -143,13 +143,15 @@ public final class DeviceSessionActivity extends Activity {
                 v -> querySelectedDevices());
         addButton(root, "■  Stop streams on selected devices", panel2, textPrimary,
                 v -> stopSelectedStreams());
+        addButton(root, "▦  Request screens from selected devices", accent, bg,
+                v -> openSelectedScreens());
 
         addSection(root, "LIVE CONTROL");
         addButton(root, "◉  View screen + remote control", panel2, textPrimary,
                 v -> openViewer());
         addButton(root, "■  Stop remote stream", panel2, textPrimary,
                 v -> stopStream());
-        addButton(root, "●  Start screen + microphone stream", accent, bg,
+        addButton(root, "●  Share this phone's screen + microphone", accent, bg,
                 v -> startScreenStream());
 
         addSection(root, "DEVICE");
@@ -486,12 +488,55 @@ public final class DeviceSessionActivity extends Activity {
     }
 
     private void openViewer() {
-        if (selectedSession() == null) {
+        DeviceSession target = selectedSession();
+        if (target == null) {
             status.setText("No connected device.");
             return;
         }
+        if (service == null) {
+            status.setText("Connection service is unavailable.");
+            return;
+        }
+        if (!service.rtc().hasSession(target.address())) {
+            try {
+                service.rtc().requestScreenShare(target);
+                status.setText("Screen request sent. Waiting for the device owner to approve.");
+            } catch (Exception error) {
+                status.setText("Could not request remote screen: " + error.getMessage());
+                return;
+            }
+        }
         startActivity(new Intent(this, RtcViewerActivity.class)
-                .putExtra("peer_address", selected.address()));
+                .putExtra("peer_address", target.address()));
+    }
+
+    private void openSelectedScreens() {
+        java.util.List<DeviceSession> targets = selectedSessions();
+        if (targets.isEmpty()) {
+            status.setText("Select one or more connected devices first.");
+            return;
+        }
+        if (service == null) {
+            status.setText("Connection service is unavailable.");
+            return;
+        }
+        java.util.ArrayList<String> requested = new java.util.ArrayList<>();
+        int failed = 0;
+        for (DeviceSession target : targets) {
+            requested.add(target.address());
+            if (service.rtc().hasSession(target.address())) continue;
+            try {
+                service.rtc().requestScreenShare(target);
+            } catch (Exception error) {
+                failed++;
+            }
+        }
+        status.setText("Screen requests sent to " + (targets.size() - failed)
+                + " devices. Each owner must approve on their phone."
+                + (failed == 0 ? "" : " " + failed + " requests failed."));
+        startActivity(new Intent(this, MultiRtcViewerActivity.class)
+                .putExtra(MultiRtcViewerActivity.EXTRA_PEERS,
+                        requested.toArray(new String[0])));
     }
 
     private void stopStream() {
