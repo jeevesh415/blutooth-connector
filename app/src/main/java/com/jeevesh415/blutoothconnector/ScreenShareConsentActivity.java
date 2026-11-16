@@ -251,12 +251,8 @@ public final class ScreenShareConsentActivity extends Activity {
         finish();
     }
 
-    @Override public void onBackPressed() {
-        if (!capturePromptOpen) declineRequest();
-        else super.onBackPressed();
-    }
-
     @Override protected void onDestroy() {
+        if (!responded && !capturePromptOpen) declineRequest();
         if (serviceConnection != null) {
             try { unbindService(serviceConnection); } catch (Exception ignored) {}
             serviceConnection = null;
