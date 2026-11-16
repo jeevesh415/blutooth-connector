@@ -126,7 +126,8 @@ public final class RtcViewerActivity extends Activity {
         controlToggle.setTextSize(10);
         controlToggle.setGravity(Gravity.CENTER);
         controlToggle.setButtonTintList(android.content.res.ColorStateList.valueOf(ACCENT));
-        controlToggle.setChecked(true);
+        controlToggle.setChecked(false);
+        controlToggle.setEnabled(false);
         controlToggle.setPadding(0, 0, 0, dp(5));
         palette.addView(controlToggle);
 
