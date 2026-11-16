@@ -44,6 +44,7 @@ public final class Protocol {
     // owner must approve in-app and then complete Android MediaProjection consent.
     public static final String RTC_SHARE_REQUEST = "RTC_SHARE_REQUEST";
     public static final String RTC_SHARE_RESPONSE = "RTC_SHARE_RESPONSE";
+    public static final String RTC_SHARE_CANCEL = "RTC_SHARE_CANCEL";
 
     public static String id(long sequence) {
         return String.format(Locale.US, "%08x", sequence);
