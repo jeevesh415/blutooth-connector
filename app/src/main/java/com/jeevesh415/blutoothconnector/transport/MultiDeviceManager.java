@@ -192,7 +192,11 @@ public final class MultiDeviceManager implements AutoCloseable {
         }
     }
 
-    private void rememberEnrolledPeer(String address) {
+    /**
+     * Persist a peer for automatic reconnect only after ConnectionService has
+     * completed the mutual signed application-authentication handshake.
+     */
+    public void markEnrolledPeer(String address) {
         if (bulkContext == null || address == null || address.isEmpty()) return;
         android.content.SharedPreferences prefs = bulkContext
                 .getSharedPreferences(ENROLLMENT_PREFS, Context.MODE_PRIVATE);
@@ -447,7 +451,6 @@ public final class MultiDeviceManager implements AutoCloseable {
                     new DeviceSession(device, socket, holder[0]);
             sessionHolder[0] = session;
             sessions.put(address, session);
-            rememberEnrolledPeer(address);
             retryAttempts.remove(address);
             holder[0].startReader();
 
