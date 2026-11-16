@@ -47,6 +47,7 @@ public final class RtcViewerActivity extends Activity {
     private TextView liveDot;
     private CheckBox controlToggle;
     private ServiceConnection connection;
+    private RtcPeerManager.Listener rtcListener;
     private ConnectionService service;
     private MultiDeviceManager peers;
     private String peerAddress;
@@ -192,11 +193,14 @@ public final class RtcViewerActivity extends Activity {
                         (ConnectionService.LocalBinder) binder;
                 service = local.service();
                 peers = service.peers();
-                if (peers != null && !peers.sessions().isEmpty()) {
+                if (peerAddress == null) {
+                    peerAddress = getIntent().getStringExtra("peer_address");
+                }
+                if (peerAddress == null && peers != null && !peers.sessions().isEmpty()) {
                     peerAddress = peers.sessions().iterator().next().address();
                 }
 
-                service.rtc().setListener(new RtcPeerManager.Listener() {
+                rtcListener = new RtcPeerManager.Listener() {
                     @Override public void onRemoteVideo(String peer, VideoTrack track) {
                         if (peerAddress == null) peerAddress = peer;
                         if (!peer.equals(peerAddress) || renderer == null) return;
@@ -218,12 +222,23 @@ public final class RtcViewerActivity extends Activity {
                             }
                         });
                     }
-                });
+                };
+                service.rtc().setListener(rtcListener);
+
+                DeviceSession target = peers == null || peerAddress == null
+                        ? null : peers.session(peerAddress);
+                if (target != null && !service.rtc().hasSession(peerAddress)) {
+                    try {
+                        service.rtc().requestScreenShare(target);
+                    } catch (Exception error) {
+                        status.setText("Could not request screen: " + error.getMessage());
+                    }
+                }
 
                 status.setText(
                         peerAddress == null
                                 ? "Waiting for a connected publisher…"
-                                : "Waiting for screen stream…");
+                                : "Screen request sent or awaiting approved stream…");
             }
 
             @Override public void onServiceDisconnected(ComponentName name) {
@@ -426,6 +441,10 @@ public final class RtcViewerActivity extends Activity {
     @Override protected void onDestroy() {
         if (service != null && peers != null && peerAddress != null) {
             try { stopRemoteStream(); } catch (Exception ignored) {}
+        }
+        if (service != null && rtcListener != null) {
+            service.rtc().clearListener(rtcListener);
+            rtcListener = null;
         }
         if (activeTrack != null && activeSink != null) {
             try { activeTrack.removeSink(activeSink); } catch (Exception ignored) {}
