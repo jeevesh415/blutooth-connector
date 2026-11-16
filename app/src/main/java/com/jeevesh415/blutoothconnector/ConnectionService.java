@@ -221,6 +221,17 @@ public final class ConnectionService extends Service {
         if (requester != null) sendScreenShareResponse(requester, requestId, response);
     }
 
+    private void handleScreenShareCancel(DeviceSession session, Frame frame) {
+        String requestId = frame.payload.optString("requestId", "");
+        PendingScreenShareRequest pending =
+                pendingScreenShareRequests.get(session.address());
+        if (pending == null || !pending.requestId.equals(requestId)) return;
+        if (pendingScreenShareRequests.remove(session.address(), pending)) {
+            cancelScreenShareNotification(session.address());
+            sendScreenShareResponse(session, requestId, "cancelled");
+        }
+    }
+
     private void handleScreenShareRequest(DeviceSession session, Frame frame) {
         String requestId = frame.payload.optString("requestId", "");
         if (requestId.length() < 8 || requestId.length() > 64) {
@@ -639,6 +650,10 @@ public final class ConnectionService extends Service {
 
             if (Protocol.RTC_SHARE_REQUEST.equals(frame.type)) {
                 handleScreenShareRequest(session, frame);
+                return;
+            }
+            if (Protocol.RTC_SHARE_CANCEL.equals(frame.type)) {
+                handleScreenShareCancel(session, frame);
                 return;
             }
             if (Protocol.RTC_SHARE_RESPONSE.equals(frame.type)) {
