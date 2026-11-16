@@ -230,18 +230,21 @@ public final class RtcViewerActivity extends Activity {
 
                 DeviceSession target = peers == null || peerAddress == null
                         ? null : peers.session(peerAddress);
-                if (target != null && !service.rtc().hasSession(peerAddress)) {
+                if (peerAddress == null) {
+                    status.setText("Waiting for a connected publisher…");
+                } else if (target == null) {
+                    status.setText("Selected device is not connected.");
+                } else if (service.rtc().hasSession(peerAddress)) {
+                    status.setText("Connected to the existing remote screen.");
+                } else {
                     try {
                         service.rtc().requestScreenShare(target);
+                        status.setText(
+                                "Screen request sent. Waiting for the device owner to approve.");
                     } catch (Exception error) {
                         status.setText("Could not request screen: " + error.getMessage());
                     }
                 }
-
-                status.setText(
-                        peerAddress == null
-                                ? "Waiting for a connected publisher…"
-                                : "Screen request sent or awaiting approved stream…");
             }
 
             @Override public void onServiceDisconnected(ComponentName name) {
