@@ -212,12 +212,12 @@ public final class ConnectionService extends Service {
                     "Accessibility must be enabled before remote input can be authorized");
         }
         startScreenShare(peerAddress, resultCode, projectionData, false);
-        if (RemoteInputAccessibilityService.instance() != null) {
-            if (allowRemoteInput) {
-                RemoteControlAuthorization.authorize(this, peerAddress);
-            } else {
-                RemoteControlAuthorization.revoke(this, peerAddress);
-            }
+        if (allowRemoteInput) {
+            RemoteControlAuthorization.authorize(this, peerAddress);
+        } else {
+            // Revoke any older saved grant even when Accessibility has since
+            // been disabled. Re-enabling Accessibility must not revive stale consent.
+            RemoteControlAuthorization.revoke(this, peerAddress);
         }
         activeScreenShareRequests.put(peerAddress, requestId);
         pendingScreenShareRequests.remove(peerAddress);
