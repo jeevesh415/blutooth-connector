@@ -266,10 +266,6 @@ public final class MultiRtcViewerActivity extends Activity {
         }
     }
 
-    @Override public void onBackPressed() {
-        stopAllStreams();
-    }
-
     @Override protected void onDestroy() {
         if (!handingOffToFullScreen) stopRequestedStreams();
         for (Map.Entry<String, VideoTrack> entry : tracks.entrySet()) {
